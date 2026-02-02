@@ -932,7 +932,7 @@ def create_gradio_interface():
                 
                 use_4bit_checkbox = gr.Checkbox(
                     value=True,
-                    label="Использовать 4-bit квантизацию",
+                    label="Эмуляция 4-bit квантизации",
                     info="Экономит память GPU, но замедляет работу"
                 )
                 
