@@ -541,8 +541,12 @@ def transcribe_audio(
             ext = os.path.splitext(original_path)[1]
             temp_copy = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(TEMP_DIR))
             temp_copy.close()
+            time.sleep(0.3)
             try:
-                shutil.copy2(original_path, temp_copy.name)
+                with open(original_path, 'rb') as src:
+                    data = src.read()
+                with open(temp_copy.name, 'wb') as dst:
+                    dst.write(data)
                 audio_path = temp_copy.name
             except Exception as copy_err:
                 print(f"Не удалось скопировать файл: {copy_err}, используем оригинал")
@@ -842,7 +846,7 @@ def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, 
         else:
             lines.append(text)
     
-    return "\n\n".join(lines)
+    return "\n".join(lines)
 
 
 def create_gradio_interface():
@@ -899,12 +903,7 @@ def create_gradio_interface():
         
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
-        gr.HTML("""
-        <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;">
-            <div style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</div>
-            <div style="font-size: 0.85rem;">Канал <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</div>
-        </div>
-        """)
+        gr.HTML("""<div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;"><div style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</div><div style="font-size: 0.85rem;">Канал <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</div></div>""")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -976,6 +975,13 @@ def create_gradio_interface():
                         label="Штраф за повторения",
                         info="1.0 = без штрафа, выше = меньше повторений"
                     )
+                
+                with gr.Accordion("Инструкция", open=False):
+                    gr.Markdown("""1. Выберите модель и нажмите "Загрузить модель"
+2. Загрузите аудио/видео или запишите с микрофона
+3. Контекст (опционально): добавьте ключевые слова
+4. Нажмите "Распознать речь" и дождитесь результата
+5. Просмотрите результаты во вкладках""")
             
             with gr.Column(scale=2):
                 gr.Markdown("## Входные данные")
@@ -1051,17 +1057,6 @@ def create_gradio_interface():
                             label="Прослушайте отдельные сегменты"
                         )
         
-        gr.Markdown("## Инструкция")
-        gr.Markdown(f"""
-        1. **Выберите модель** и нажмите "Загрузить модель"
-           - Полная модель: лучшее качество, требует ~16GB VRAM
-           - 4-bit версия: экономит память (~7GB), но медленнее
-        2. **Загрузите аудио/видео** или запишите с микрофона
-           - Поддерживаемые форматы: {', '.join(sorted(set([ext.lower() for ext in COMMON_AUDIO_EXTS])))}
-        3. **Контекст (опционально)**: добавьте ключевые слова для улучшения точности
-        4. **Нажмите "Распознать речь"** и дождитесь результата
-        5. **Просмотрите результаты**: сырой текст, обработанный текст по спикерам, аудио сегменты
-        """)
         
         
         def reset_stop_flag():
@@ -1104,7 +1099,8 @@ def create_gradio_interface():
         def transcribe_wrapper(
             audio_file, video_file, mic_file, active_tab,
             max_tokens, temperature, top_p, do_sample, rep_penalty, context,
-            model_path, use_4bit, current_segments
+            model_path, use_4bit, current_segments,
+            show_timestamps, show_speakers, show_descriptors
         ):
             global asr_model
             
@@ -1150,7 +1146,7 @@ def create_gradio_interface():
             if asr_model is not None:
                 model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
             
-            processed = format_processed_text(segments_list, False, False, False)
+            processed = format_processed_text(segments_list, show_timestamps, show_speakers, show_descriptors)
             yield raw_text, audio_html, segments_list, processed, model_status_text
         
         is_running = gr.State(False)
@@ -1184,7 +1180,8 @@ def create_gradio_interface():
                 audio_input, video_input, mic_input, active_input_tab,
                 max_tokens_slider, temperature_slider, top_p_slider,
                 do_sample_checkbox, repetition_penalty_slider, context_info_input,
-                model_dropdown, use_4bit_checkbox, last_segments
+                model_dropdown, use_4bit_checkbox, last_segments,
+                show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox
             ],
             outputs=[raw_output, audio_segments_output, last_segments, processed_output, model_status]
         ).then(
@@ -1212,11 +1209,22 @@ def create_gradio_interface():
             outputs=[processed_output]
         )
         
+        def copy_text(text):
+            return gr.update(value="Скопировано!")
+        
+        def reset_copy_btn():
+            return gr.update(value="Копировать текст")
+        
         copy_btn.click(
-            fn=None,
+            fn=copy_text,
             inputs=[processed_output],
-            outputs=[],
-            js="(text) => { navigator.clipboard.writeText(text); }"
+            outputs=[copy_btn],
+            js="(text) => { navigator.clipboard.writeText(text); return text; }"
+        ).then(
+            fn=reset_copy_btn,
+            inputs=[],
+            outputs=[copy_btn],
+            js="() => new Promise(resolve => setTimeout(resolve, 1500))"
         )
     
     return demo
