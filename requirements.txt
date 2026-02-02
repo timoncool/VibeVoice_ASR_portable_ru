@@ -5,6 +5,7 @@
 transformers>=4.48.0
 accelerate>=0.20.0
 sentencepiece
+tokenizers>=0.15.0
 
 # Аудио обработка
 soundfile
