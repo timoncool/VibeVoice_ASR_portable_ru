@@ -94,7 +94,12 @@ class VibeVoiceASRInference:
             "trust_remote_code": True
         }
         
-        if use_4bit:
+        is_prequantized = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
+        
+        if is_prequantized:
+            print("Модель уже квантизирована (4-bit), пропускаем дополнительную квантизацию")
+            model_kwargs["device_map"] = "auto"
+        elif use_4bit:
             print("Включена 4-bit квантизация (bitsandbytes)")
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -454,7 +459,8 @@ def extract_audio_segments(audio_path: str, segments: List[Dict]) -> List[Tuple[
 
 
 def transcribe_audio(
-    file_input,
+    audio_file_input,
+    video_file_input,
     mic_input,
     audio_path_input: str,
     start_time_input: str,
@@ -464,16 +470,27 @@ def transcribe_audio(
     top_p: float,
     do_sample: bool,
     repetition_penalty: float = 1.0,
-    context_info: str = ""
+    context_info: str = "",
+    model_path: str = None,
+    use_4bit: bool = False
 ) -> Generator[Tuple[str, str], None, None]:
     """
     Транскрибация аудио с потоковым выводом.
     """
-    if asr_model is None:
-        yield "Ошибка: Модель не загружена! Выберите модель и нажмите 'Загрузить модель'.", ""
-        return
+    global asr_model
     
-    audio_input = file_input or mic_input
+    if asr_model is None:
+        if model_path:
+            yield "Загрузка модели...", ""
+            result = initialize_model(model_path, use_4bit)
+            if "Ошибка" in result:
+                yield result, ""
+                return
+        else:
+            yield "Ошибка: Модель не загружена! Выберите модель и нажмите 'Загрузить модель'.", ""
+            return
+    
+    audio_input = audio_file_input or video_file_input or mic_input
     
     if not audio_path_input and audio_input is None:
         yield "Ошибка: Загрузите аудио/видео файл или запишите с микрофона!", ""
@@ -805,13 +822,10 @@ def create_gradio_interface():
         input_border_color_dark="#4a5568",
     ), css=custom_css) as demo:
         
-        gr.Markdown(f"""
-        # VibeVoice ASR - Распознавание речи в текст
-        ### Портативная русскоязычная версия v{APP_VERSION}
-        """)
+        gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
         gr.HTML("""
-        <div style="text-align: center; padding: 8px; margin-bottom: 10px; opacity: 0.9;">
+        <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;">
             <p style="font-size: 0.85rem; margin-bottom: 0.3rem;">
                 Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
             </p>
@@ -896,18 +910,28 @@ def create_gradio_interface():
             
             with gr.Column(scale=2):
                 gr.Markdown("## Аудио/Видео вход")
-                audio_input = gr.File(
-                    label="Загрузите аудио или видео файл",
-                    file_types=[".mp3", ".wav", ".m4a", ".mp4", ".mov", ".flac", ".ogg", ".opus", ".webm", ".aac", ".wma", ".m4v", ".3gp", ".mpeg", ".flv", ".avi", ".mkv"],
-                    type="filepath"
-                )
                 
-                mic_input = gr.Audio(
-                    label="Или запишите с микрофона",
-                    sources=["microphone"],
-                    type="filepath",
-                    interactive=True
-                )
+                with gr.Tabs():
+                    with gr.TabItem("Загрузить файл"):
+                        audio_input = gr.Audio(
+                            label="Аудио файл",
+                            sources=["upload"],
+                            type="filepath",
+                            interactive=True
+                        )
+                        video_input = gr.Video(
+                            label="Видео файл",
+                            sources=["upload"],
+                            interactive=True
+                        )
+                    
+                    with gr.TabItem("Запись с микрофона"):
+                        mic_input = gr.Audio(
+                            label="Запишите с микрофона",
+                            sources=["microphone"],
+                            type="filepath",
+                            interactive=True
+                        )
                 
                 with gr.Accordion("Дополнительно: Путь к файлу и нарезка", open=False):
                     audio_path_input = gr.Textbox(
@@ -996,6 +1020,7 @@ def create_gradio_interface():
             fn=transcribe_audio,
             inputs=[
                 audio_input,
+                video_input,
                 mic_input,
                 audio_path_input,
                 start_time_input,
@@ -1005,7 +1030,9 @@ def create_gradio_interface():
                 top_p_slider,
                 do_sample_checkbox,
                 repetition_penalty_slider,
-                context_info_input
+                context_info_input,
+                model_dropdown,
+                use_4bit_checkbox
             ],
             outputs=[raw_output, audio_segments_output]
         )
