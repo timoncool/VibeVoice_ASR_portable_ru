@@ -123,15 +123,13 @@ VibeVoice_ASR_portable_ru/
 
 ## Авторы
 
-**Портативная версия и русификация:**
-- [@Nerual Dreming](https://github.com/timoncool)
-- [Нейро-Софт](https://neuro-cartel.com)
+Собрал [Nerual Dreaming](https://t.me/nerual_dreming) — основатель [ArtGeneration.me](https://artgeneration.me/), техноблогер и нейро-евангелист.
 
-**Оригинальная модель:**
-- [Microsoft VibeVoice ASR](https://huggingface.co/microsoft/VibeVoice-ASR)
+[Нейро-Софт](https://t.me/neuroport) — репаки и портативки полезных нейросетей
 
-**4-bit квантизация:**
-- [scerz/VibeVoice-ASR-4bit](https://huggingface.co/scerz/VibeVoice-ASR-4bit)
+**Оригинальная модель:** [Microsoft VibeVoice ASR](https://huggingface.co/microsoft/VibeVoice-ASR)
+
+**4-bit квантизация:** [scerz/VibeVoice-ASR-4bit](https://huggingface.co/scerz/VibeVoice-ASR-4bit)
 
 ## Лицензия
 
@@ -142,4 +140,4 @@ VibeVoice_ASR_portable_ru/
 
 - [VibeVoice ASR на HuggingFace](https://huggingface.co/microsoft/VibeVoice-ASR)
 - [Репозиторий Microsoft VibeVoice](https://github.com/microsoft/VibeVoice)
-- [Нейро-Софт](https://neuro-cartel.com)
+- [Телеграм канал Нейро-Софт](https://t.me/neuroport)

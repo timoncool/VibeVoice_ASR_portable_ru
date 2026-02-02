@@ -938,10 +938,13 @@ def create_gradio_interface():
         """)
         
         gr.HTML("""
-        <div class="credits">
-            <p>Портативная версия: <strong>Nerual Dreming</strong> | 
-            <a href="https://neuro-cartel.com" target="_blank">Нейро-Софт</a> | 
-            Модель: <a href="https://huggingface.co/microsoft/VibeVoice-ASR" target="_blank">Microsoft VibeVoice ASR</a></p>
+        <div style="text-align: center; padding: 15px; margin-top: 10px; opacity: 0.9;">
+            <p style="font-size: 0.85rem; margin-bottom: 0.3rem;">
+                Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
+            </p>
+            <p style="font-size: 0.85rem;">
+                <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей
+            </p>
         </div>
         """)
         
