@@ -794,8 +794,8 @@ def transcribe_audio(
         yield f"Ошибка: {str(e)}", ""
 
 
-def format_processed_text(segments, show_timestamps: bool, show_speakers: bool) -> str:
-    """Форматирование текста по спикерам с опциональными метками."""
+def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, hide_music: bool = False, hide_lyric: bool = False) -> str:
+    """Форматирование текста по спикерам с опциональными метками и фильтрацией дескрипторов."""
     if not segments:
         return ""
     
@@ -805,6 +805,15 @@ def format_processed_text(segments, show_timestamps: bool, show_speakers: bool) 
         if isinstance(text, str):
             text = text.strip()
         if not text:
+            continue
+        
+        if hide_music and text == "[Music]":
+            continue
+        
+        if hide_lyric:
+            text = text.replace("[Lyric] ", "").replace("[Lyric]", "")
+        
+        if not text.strip():
             continue
         
         prefix_parts = []
@@ -971,7 +980,7 @@ def create_gradio_interface():
                 active_input_tab = gr.State(0)
                 
                 with gr.Tabs() as input_tabs:
-                    with gr.TabItem("Аудио", id=0):
+                    with gr.TabItem("Аудио", id=0) as audio_tab:
                         audio_input = gr.Audio(
                             label="Аудио файл",
                             sources=["upload"],
@@ -979,14 +988,14 @@ def create_gradio_interface():
                             interactive=True
                         )
                     
-                    with gr.TabItem("Видео", id=1):
+                    with gr.TabItem("Видео", id=1) as video_tab:
                         video_input = gr.Video(
                             label="Видео файл",
                             sources=["upload"],
                             interactive=True
                         )
                     
-                    with gr.TabItem("Микрофон", id=2):
+                    with gr.TabItem("Микрофон", id=2) as mic_tab:
                         mic_input = gr.Audio(
                             label="Запишите с микрофона",
                             sources=["microphone"],
@@ -994,11 +1003,9 @@ def create_gradio_interface():
                             interactive=True
                         )
                 
-                input_tabs.select(
-                    fn=lambda evt: evt.index,
-                    inputs=[],
-                    outputs=[active_input_tab]
-                )
+                audio_tab.select(fn=lambda: 0, inputs=[], outputs=[active_input_tab])
+                video_tab.select(fn=lambda: 1, inputs=[], outputs=[active_input_tab])
+                mic_tab.select(fn=lambda: 2, inputs=[], outputs=[active_input_tab])
                 
                 with gr.Row():
                     transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", scale=3)
@@ -1019,17 +1026,26 @@ def create_gradio_interface():
                         with gr.Row():
                             show_timestamps_checkbox = gr.Checkbox(
                                 value=True,
-                                label="Показывать временные метки"
+                                label="Временные метки"
                             )
                             show_speakers_checkbox = gr.Checkbox(
                                 value=True,
-                                label="Показывать спикеров"
+                                label="Спикеры"
+                            )
+                            hide_music_checkbox = gr.Checkbox(
+                                value=False,
+                                label="Убрать [Music]"
+                            )
+                            hide_lyric_checkbox = gr.Checkbox(
+                                value=False,
+                                label="Убрать [Lyric]"
                             )
                         processed_output = gr.Textbox(
                             label="Текст по спикерам",
-                            lines=10,
-                            max_lines=25,
-                            interactive=True
+                            lines=15,
+                            max_lines=30,
+                            interactive=True,
+                            show_copy_button=True
                         )
                     
                     with gr.TabItem("Аудио сегменты"):
@@ -1066,8 +1082,8 @@ def create_gradio_interface():
             is_4bit_model = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
             return gr.update(value=False, interactive=not is_4bit_model)
         
-        def update_processed_text(segments, show_timestamps, show_speakers):
-            return format_processed_text(segments, show_timestamps, show_speakers)
+        def update_processed_text(segments, show_timestamps, show_speakers, hide_music, hide_lyric):
+            return format_processed_text(segments, show_timestamps, show_speakers, hide_music, hide_lyric)
         
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
@@ -1174,13 +1190,25 @@ def create_gradio_interface():
         
         show_timestamps_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
             outputs=[processed_output]
         )
         
         show_speakers_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
+            outputs=[processed_output]
+        )
+        
+        hide_music_checkbox.change(
+            fn=update_processed_text,
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
+            outputs=[processed_output]
+        )
+        
+        hide_lyric_checkbox.change(
+            fn=update_processed_text,
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
             outputs=[processed_output]
         )
     
