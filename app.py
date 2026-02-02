@@ -18,28 +18,27 @@ import asyncio
 # GRADIO_TEMP_DIR устанавливается в run.bat - НЕ переопределять здесь!
 
 # Патч для Windows: retry при PermissionError (файл заблокирован антивирусом/системой)
-# Это стандартный подход для решения проблемы WinError 32
+# Gradio использует aiofiles для чтения файлов
 if sys.platform == "win32":
-    import anyio
-    import anyio._core._fileio
+    import aiofiles
+    import aiofiles.threadpool
 
-    _original_anyio_open_file = anyio._core._fileio.open_file
+    _original_aiofiles_open = aiofiles.threadpool._open
 
-    async def _retry_open_file(file, *args, **kwargs):
-        max_retries = 10
-        delay = 0.2
+    async def _retry_aiofiles_open(*args, **kwargs):
+        max_retries = 15
+        delay = 0.3
         for attempt in range(max_retries):
             try:
-                return await _original_anyio_open_file(file, *args, **kwargs)
+                return await _original_aiofiles_open(*args, **kwargs)
             except PermissionError:
                 if attempt < max_retries - 1:
                     await asyncio.sleep(delay)
-                    delay *= 1.5
+                    delay *= 1.3
                 else:
                     raise
 
-    anyio._core._fileio.open_file = _retry_open_file
-    anyio.open_file = _retry_open_file
+    aiofiles.threadpool._open = _retry_aiofiles_open
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1015,8 +1014,6 @@ def create_gradio_interface():
         
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("## Модель")
-                
                 model_dropdown = gr.Dropdown(
                     choices=[(name, path) for name, path in AVAILABLE_MODELS],
                     value=AVAILABLE_MODELS[0][1],
@@ -1092,8 +1089,6 @@ def create_gradio_interface():
 5. Просмотрите результаты во вкладках""")
             
             with gr.Column(scale=2):
-                gr.Markdown("## Входные данные")
-                
                 active_input_tab = gr.State(0)
                 
                 with gr.Tabs() as input_tabs:
@@ -1139,8 +1134,6 @@ def create_gradio_interface():
                 with gr.Row():
                     transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", visible=True)
                     stop_button = gr.Button("Стоп", variant="stop", size="lg", visible=False)
-                
-                gr.Markdown("## Результаты")
                 
                 with gr.Tabs():
                     with gr.TabItem("Сырой текст"):
