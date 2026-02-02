@@ -454,7 +454,8 @@ def extract_audio_segments(audio_path: str, segments: List[Dict]) -> List[Tuple[
 
 
 def transcribe_audio(
-    audio_input,
+    file_input,
+    mic_input,
     audio_path_input: str,
     start_time_input: str,
     end_time_input: str,
@@ -472,8 +473,10 @@ def transcribe_audio(
         yield "Ошибка: Модель не загружена! Выберите модель и нажмите 'Загрузить модель'.", ""
         return
     
+    audio_input = file_input or mic_input
+    
     if not audio_path_input and audio_input is None:
-        yield "Ошибка: Загрузите аудио файл или запишите с микрофона!", ""
+        yield "Ошибка: Загрузите аудио/видео файл или запишите с микрофона!", ""
         return
     
     try:
@@ -807,6 +810,17 @@ def create_gradio_interface():
         ### Портативная русскоязычная версия v{APP_VERSION}
         """)
         
+        gr.HTML("""
+        <div style="text-align: center; padding: 8px; margin-bottom: 10px; opacity: 0.9;">
+            <p style="font-size: 0.85rem; margin-bottom: 0.3rem;">
+                Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
+            </p>
+            <p style="font-size: 0.85rem; margin: 0;">
+                <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей
+            </p>
+        </div>
+        """)
+        
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("## Выбор модели")
@@ -881,10 +895,16 @@ def create_gradio_interface():
                 )
             
             with gr.Column(scale=2):
-                gr.Markdown("## Аудио вход")
-                audio_input = gr.Audio(
-                    label="Загрузите аудио файл или запишите с микрофона",
-                    sources=["upload", "microphone"],
+                gr.Markdown("## Аудио/Видео вход")
+                audio_input = gr.File(
+                    label="Загрузите аудио или видео файл",
+                    file_types=[".mp3", ".wav", ".m4a", ".mp4", ".mov", ".flac", ".ogg", ".opus", ".webm", ".aac", ".wma", ".m4v", ".3gp", ".mpeg", ".flv", ".avi", ".mkv"],
+                    type="filepath"
+                )
+                
+                mic_input = gr.Audio(
+                    label="Или запишите с микрофона",
+                    sources=["microphone"],
                     type="filepath",
                     interactive=True
                 )
@@ -942,16 +962,6 @@ def create_gradio_interface():
         5. **Просмотрите результаты**: текст и аудио сегменты
         """)
         
-        gr.HTML("""
-        <div style="text-align: center; padding: 15px; margin-top: 10px; opacity: 0.9;">
-            <p style="font-size: 0.85rem; margin-bottom: 0.3rem;">
-                Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
-            </p>
-            <p style="font-size: 0.85rem;">
-                <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей
-            </p>
-        </div>
-        """)
         
         def reset_stop_flag():
             global stop_generation_flag
@@ -986,6 +996,7 @@ def create_gradio_interface():
             fn=transcribe_audio,
             inputs=[
                 audio_input,
+                mic_input,
                 audio_path_input,
                 start_time_input,
                 end_time_input,
