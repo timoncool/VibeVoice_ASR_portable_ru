@@ -901,7 +901,7 @@ def create_gradio_interface():
                 )
                 
                 use_4bit_checkbox = gr.Checkbox(
-                    value=False,
+                    value=True,
                     label="Использовать 4-bit квантизацию",
                     info="Экономит память GPU, но замедляет работу"
                 )
@@ -1082,6 +1082,8 @@ def create_gradio_interface():
             model_path, use_4bit, current_segments
         ):
             segments_list = []
+            raw_text = ""
+            audio_html = ""
             
             for raw_text, audio_html in transcribe_audio(
                 audio_file, video_file, mic_file,
@@ -1093,13 +1095,13 @@ def create_gradio_interface():
                 yield raw_text, audio_html, segments_list, ""
             
             try:
-                import json
-                import re
-                json_match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-                if json_match:
-                    segments_list = json.loads(json_match.group())
-            except:
-                pass
+                start_idx = raw_text.find('[')
+                end_idx = raw_text.rfind(']')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    json_str = raw_text[start_idx:end_idx+1]
+                    segments_list = json.loads(json_str)
+            except Exception as e:
+                print(f"Ошибка парсинга сегментов: {e}")
             
             processed = format_processed_text(segments_list, True, True)
             yield raw_text, audio_html, segments_list, processed
