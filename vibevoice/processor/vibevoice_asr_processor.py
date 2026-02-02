@@ -497,6 +497,10 @@ class VibeVoiceASRProcessor:
         Returns:
             List of dictionaries with transcription segments
         """
+        if not text or not text.strip():
+            logger.warning("Empty text received for post-processing")
+            return []
+        
         try:
             # Try to parse as JSON
             if "```json" in text:
@@ -522,8 +526,19 @@ class VibeVoiceASRProcessor:
                                 json_end = i + 1
                                 break
                     json_str = text[json_start:json_end]
+                    
+                    # If brackets are not balanced, try to fix incomplete JSON
+                    if bracket_count > 0:
+                        logger.warning(f"Incomplete JSON detected (unclosed brackets: {bracket_count}), attempting to fix")
+                        # Add missing closing brackets
+                        json_str = text[json_start:]
+                        for _ in range(bracket_count):
+                            if json_str.rstrip().endswith(','):
+                                json_str = json_str.rstrip()[:-1]
+                            json_str += "]" if "[" in json_str[:10] else "}"
                 else:
-                    json_str = text
+                    logger.warning("No JSON structure found in text")
+                    return []
             
             # Parse JSON
             result = json.loads(json_str)
