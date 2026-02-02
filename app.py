@@ -1338,10 +1338,20 @@ if __name__ == "__main__":
     print()
     
     demo = create_gradio_interface()
+    
+    allowed_paths = [str(SCRIPT_DIR), str(TEMP_DIR), str(OUTPUT_DIR)]
+    if sys.platform == "win32":
+        import string
+        for drive in string.ascii_uppercase:
+            drive_path = f"{drive}:\\"
+            if os.path.exists(drive_path):
+                allowed_paths.append(drive_path)
+    
     demo.queue(default_concurrency_limit=2).launch(
         server_name="127.0.0.1",
         server_port=7860,
         share=False,
         show_error=True,
-        inbrowser=True
+        inbrowser=True,
+        allowed_paths=allowed_paths
     )
