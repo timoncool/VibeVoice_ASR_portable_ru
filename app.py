@@ -804,7 +804,7 @@ def create_gradio_interface():
     }
     """
     
-    with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=gr.themes.Base(primary_hue="blue", neutral_hue="slate").set(
+    dark_theme = gr.themes.Base(primary_hue="blue", neutral_hue="slate").set(
         body_background_fill="#1a202c",
         body_background_fill_dark="#1a202c",
         block_background_fill="#2d3748",
@@ -827,7 +827,9 @@ def create_gradio_interface():
         input_background_fill_dark="#1a202c",
         input_border_color="#4a5568",
         input_border_color_dark="#4a5568",
-    ), css=custom_css) as demo:
+    )
+    
+    with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
         
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
