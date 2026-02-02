@@ -12,6 +12,9 @@ Microsoft - оригинальная модель VibeVoice ASR
 
 import os
 import sys
+import tempfile
+
+os.environ['GRADIO_TEMP_DIR'] = tempfile.gettempdir()
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -541,7 +544,6 @@ def transcribe_audio(
             ext = os.path.splitext(original_path)[1]
             temp_copy = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(TEMP_DIR))
             temp_copy.close()
-            time.sleep(0.3)
             try:
                 with open(original_path, 'rb') as src:
                     data = src.read()
@@ -809,13 +811,26 @@ def transcribe_audio(
         yield f"Ошибка: {str(e)}", ""
 
 
-def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, show_descriptors: bool = False) -> str:
+def get_unique_speakers(segments) -> list:
+    """Извлечение уникальных спикеров из сегментов."""
+    speakers = set()
+    for seg in segments:
+        speaker = seg.get('speaker_id') if seg.get('speaker_id') is not None else seg.get('Speaker')
+        if speaker is not None:
+            speakers.add(speaker)
+    return sorted(list(speakers))
+
+
+def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, show_descriptors: bool = False, selected_speakers: list = None) -> str:
     """Форматирование текста по спикерам с опциональными метками и фильтрацией дескрипторов."""
     if not segments:
         return ""
     
     lines = []
     for seg in segments:
+        speaker = seg.get('speaker_id') if seg.get('speaker_id') is not None else seg.get('Speaker')
+        if selected_speakers is not None and len(selected_speakers) > 0 and speaker not in selected_speakers:
+            continue
         text = seg.get('text') or seg.get('Content', '')
         if isinstance(text, str):
             text = text.strip()
@@ -903,7 +918,8 @@ def create_gradio_interface():
         
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
-        gr.HTML("""<div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;"><div style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</div><div style="font-size: 0.85rem;">Канал <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</div></div>""")
+        gr.Markdown("Собрал [Nerual Dreaming](https://t.me/nerual_dreming) — основатель [ArtGeneration.me](https://artgeneration.me/), техноблогер и нейро-евангелист.")
+        gr.Markdown("Канал [Нейро-Софт](https://t.me/neuroport) — репаки и портативки полезных нейросетей")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -976,8 +992,8 @@ def create_gradio_interface():
                         info="1.0 = без штрафа, выше = меньше повторений"
                     )
                 
-                with gr.Accordion("Инструкция", open=False):
-                    gr.Markdown("""1. Выберите модель и нажмите "Загрузить модель"
+                gr.Markdown("### Инструкция")
+                gr.Markdown("""1. Выберите модель и нажмите "Загрузить модель"
 2. Загрузите аудио/видео или запишите с микрофона
 3. Контекст (опционально): добавьте ключевые слова
 4. Нажмите "Распознать речь" и дождитесь результата
@@ -1043,6 +1059,12 @@ def create_gradio_interface():
                                 value=False,
                                 label="Показать дескрипторы"
                             )
+                        speaker_filter = gr.CheckboxGroup(
+                            choices=[],
+                            value=[],
+                            label="Фильтр по спикерам",
+                            visible=False
+                        )
                         processed_output = gr.Textbox(
                             label="Текст по спикерам",
                             lines=15,
@@ -1075,8 +1097,17 @@ def create_gradio_interface():
             is_4bit_model = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
             return gr.update(value=False, interactive=not is_4bit_model)
         
-        def update_processed_text(segments, show_timestamps, show_speakers, show_descriptors):
-            return format_processed_text(segments, show_timestamps, show_speakers, show_descriptors)
+        def update_processed_text(segments, show_timestamps, show_speakers, show_descriptors, selected_speakers):
+            speaker_ids = None
+            if selected_speakers:
+                speaker_ids = []
+                for s in selected_speakers:
+                    try:
+                        speaker_id = int(s.replace("Спикер ", ""))
+                        speaker_ids.append(speaker_id)
+                    except (ValueError, AttributeError):
+                        pass
+            return format_processed_text(segments, show_timestamps, show_speakers, show_descriptors, speaker_ids)
         
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
@@ -1132,7 +1163,7 @@ def create_gradio_interface():
             ):
                 if asr_model is not None:
                     model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
-                yield raw_text, audio_html, segments_list, "", model_status_text
+                yield raw_text, audio_html, segments_list, "", model_status_text, gr.update()
             
             try:
                 start_idx = raw_text.find('[')
@@ -1146,8 +1177,15 @@ def create_gradio_interface():
             if asr_model is not None:
                 model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
             
+            unique_speakers = get_unique_speakers(segments_list)
+            speaker_filter_update = gr.update(
+                choices=[f"Спикер {s}" for s in unique_speakers],
+                value=[f"Спикер {s}" for s in unique_speakers],
+                visible=len(unique_speakers) > 1
+            )
+            
             processed = format_processed_text(segments_list, show_timestamps, show_speakers, show_descriptors)
-            yield raw_text, audio_html, segments_list, processed, model_status_text
+            yield raw_text, audio_html, segments_list, processed, model_status_text, speaker_filter_update
         
         is_running = gr.State(False)
         
@@ -1183,7 +1221,7 @@ def create_gradio_interface():
                 model_dropdown, use_4bit_checkbox, last_segments,
                 show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox
             ],
-            outputs=[raw_output, audio_segments_output, last_segments, processed_output, model_status]
+            outputs=[raw_output, audio_segments_output, last_segments, processed_output, model_status, speaker_filter]
         ).then(
             fn=finish_transcription,
             inputs=[],
@@ -1193,19 +1231,25 @@ def create_gradio_interface():
         
         show_timestamps_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox, speaker_filter],
             outputs=[processed_output]
         )
         
         show_speakers_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox, speaker_filter],
             outputs=[processed_output]
         )
         
         show_descriptors_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox, speaker_filter],
+            outputs=[processed_output]
+        )
+        
+        speaker_filter.change(
+            fn=update_processed_text,
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox, speaker_filter],
             outputs=[processed_output]
         )
         
