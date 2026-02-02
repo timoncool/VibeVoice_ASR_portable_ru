@@ -964,7 +964,6 @@ def create_gradio_interface():
     )
     
     with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
-        demo.queue(default_concurrency_limit=2)
         
         last_segments = gr.State([])
         
@@ -1324,6 +1323,7 @@ def create_gradio_interface():
             js="() => new Promise(resolve => setTimeout(resolve, 1500))"
         )
     
+    demo.queue(default_concurrency_limit=2)
     return demo
 
 
