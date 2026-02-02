@@ -893,12 +893,12 @@ def create_gradio_interface():
         
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("## Выбор модели")
+                gr.Markdown("## Модель")
                 
                 model_dropdown = gr.Dropdown(
                     choices=[(name, path) for name, path in AVAILABLE_MODELS],
                     value=AVAILABLE_MODELS[0][1],
-                    label="Модель",
+                    label="Выбор модели",
                     info="4-bit версия требует меньше VRAM, но работает медленнее"
                 )
                 
@@ -908,8 +908,9 @@ def create_gradio_interface():
                     info="Экономит память GPU, но замедляет работу"
                 )
                 
-                load_model_btn = gr.Button("Загрузить модель", variant="primary")
-                model_status = gr.Textbox(label="Статус модели", interactive=False, value="Модель не загружена")
+                with gr.Row():
+                    load_model_btn = gr.Button("Загрузить модель", variant="primary", scale=1)
+                    model_status = gr.Textbox(label="Статус", interactive=False, value="Модель не загружена", scale=2)
                 
                 gr.Markdown("---")
                 
@@ -967,8 +968,10 @@ def create_gradio_interface():
             with gr.Column(scale=2):
                 gr.Markdown("## Входные данные")
                 
-                with gr.Tabs():
-                    with gr.TabItem("Аудио"):
+                active_input_tab = gr.State(0)
+                
+                with gr.Tabs() as input_tabs:
+                    with gr.TabItem("Аудио", id=0):
                         audio_input = gr.Audio(
                             label="Аудио файл",
                             sources=["upload"],
@@ -976,20 +979,26 @@ def create_gradio_interface():
                             interactive=True
                         )
                     
-                    with gr.TabItem("Видео"):
+                    with gr.TabItem("Видео", id=1):
                         video_input = gr.Video(
                             label="Видео файл",
                             sources=["upload"],
                             interactive=True
                         )
                     
-                    with gr.TabItem("Микрофон"):
+                    with gr.TabItem("Микрофон", id=2):
                         mic_input = gr.Audio(
                             label="Запишите с микрофона",
                             sources=["microphone"],
                             type="filepath",
                             interactive=True
                         )
+                
+                input_tabs.select(
+                    fn=lambda evt: evt.index,
+                    inputs=[],
+                    outputs=[active_input_tab]
+                )
                 
                 with gr.Row():
                     transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", scale=3)
@@ -1060,39 +1069,6 @@ def create_gradio_interface():
         def update_processed_text(segments, show_timestamps, show_speakers):
             return format_processed_text(segments, show_timestamps, show_speakers)
         
-        def clear_other_inputs_audio(audio_val):
-            if audio_val:
-                return None, None
-            return gr.update(), gr.update()
-        
-        def clear_other_inputs_video(video_val):
-            if video_val:
-                return None, None
-            return gr.update(), gr.update()
-        
-        def clear_other_inputs_mic(mic_val):
-            if mic_val:
-                return None, None
-            return gr.update(), gr.update()
-        
-        audio_input.change(
-            fn=clear_other_inputs_audio,
-            inputs=[audio_input],
-            outputs=[video_input, mic_input]
-        )
-        
-        video_input.change(
-            fn=clear_other_inputs_video,
-            inputs=[video_input],
-            outputs=[audio_input, mic_input]
-        )
-        
-        mic_input.change(
-            fn=clear_other_inputs_mic,
-            inputs=[mic_input],
-            outputs=[audio_input, video_input]
-        )
-        
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[do_sample_checkbox],
@@ -1112,22 +1088,41 @@ def create_gradio_interface():
         )
         
         def transcribe_wrapper(
-            audio_file, video_file, mic_file,
+            audio_file, video_file, mic_file, active_tab,
             max_tokens, temperature, top_p, do_sample, rep_penalty, context,
             model_path, use_4bit, current_segments
         ):
+            global asr_model
+            
+            if active_tab == 0:
+                selected_input = audio_file
+            elif active_tab == 1:
+                selected_input = video_file
+            else:
+                selected_input = mic_file
+            
             segments_list = []
             raw_text = ""
             audio_html = ""
+            model_status_text = ""
+            
+            if asr_model is None:
+                model_status_text = "Загрузка модели..."
+            else:
+                model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
             
             for raw_text, audio_html in transcribe_audio(
-                audio_file, video_file, mic_file,
+                selected_input if active_tab == 0 else None,
+                selected_input if active_tab == 1 else None,
+                selected_input if active_tab == 2 else None,
                 "",
                 "", "",
                 max_tokens, temperature, top_p, do_sample, rep_penalty, context,
                 model_path, use_4bit
             ):
-                yield raw_text, audio_html, segments_list, ""
+                if asr_model is not None:
+                    model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
+                yield raw_text, audio_html, segments_list, "", model_status_text
             
             try:
                 start_idx = raw_text.find('[')
@@ -1138,8 +1133,11 @@ def create_gradio_interface():
             except Exception as e:
                 print(f"Ошибка парсинга сегментов: {e}")
             
+            if asr_model is not None:
+                model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
+            
             processed = format_processed_text(segments_list, True, True)
-            yield raw_text, audio_html, segments_list, processed
+            yield raw_text, audio_html, segments_list, processed, model_status_text
         
         transcribe_button.click(
             fn=reset_stop_flag,
@@ -1154,12 +1152,12 @@ def create_gradio_interface():
         ).then(
             fn=transcribe_wrapper,
             inputs=[
-                audio_input, video_input, mic_input,
+                audio_input, video_input, mic_input, active_input_tab,
                 max_tokens_slider, temperature_slider, top_p_slider,
                 do_sample_checkbox, repetition_penalty_slider, context_info_input,
                 model_dropdown, use_4bit_checkbox, last_segments
             ],
-            outputs=[raw_output, audio_segments_output, last_segments, processed_output]
+            outputs=[raw_output, audio_segments_output, last_segments, processed_output, model_status]
         ).then(
             fn=lambda: gr.update(visible=False),
             inputs=[],
