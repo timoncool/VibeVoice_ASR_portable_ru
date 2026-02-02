@@ -1045,7 +1045,7 @@ def create_gradio_interface():
                             lines=15,
                             max_lines=30,
                             interactive=True,
-                            show_copy_button=True
+                            buttons=["copy"]
                         )
                     
                     with gr.TabItem("Аудио сегменты"):
