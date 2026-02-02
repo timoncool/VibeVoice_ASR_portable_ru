@@ -12,6 +12,9 @@ Microsoft - оригинальная модель VibeVoice ASR
 
 import os
 import sys
+import tempfile
+
+os.environ['GRADIO_TEMP_DIR'] = tempfile.gettempdir()
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -541,7 +544,6 @@ def transcribe_audio(
             ext = os.path.splitext(original_path)[1]
             temp_copy = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(TEMP_DIR))
             temp_copy.close()
-            time.sleep(0.3)
             try:
                 with open(original_path, 'rb') as src:
                     data = src.read()
@@ -903,7 +905,8 @@ def create_gradio_interface():
         
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
-        gr.HTML("""<div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;"><div style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</div><div style="font-size: 0.85rem;">Канал <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</div></div>""")
+        gr.Markdown("Собрал [Nerual Dreaming](https://t.me/nerual_dreming) — основатель [ArtGeneration.me](https://artgeneration.me/), техноблогер и нейро-евангелист.")
+        gr.Markdown("Канал [Нейро-Софт](https://t.me/neuroport) — репаки и портативки полезных нейросетей")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -976,8 +979,8 @@ def create_gradio_interface():
                         info="1.0 = без штрафа, выше = меньше повторений"
                     )
                 
-                with gr.Accordion("Инструкция", open=False):
-                    gr.Markdown("""1. Выберите модель и нажмите "Загрузить модель"
+                gr.Markdown("### Инструкция")
+                gr.Markdown("""1. Выберите модель и нажмите "Загрузить модель"
 2. Загрузите аудио/видео или запишите с микрофона
 3. Контекст (опционально): добавьте ключевые слова
 4. Нажмите "Распознать речь" и дождитесь результата
