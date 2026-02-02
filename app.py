@@ -14,7 +14,7 @@ import os
 import sys
 import tempfile
 
-# GRADIO_TEMP_DIR устанавливается в run.bat
+os.environ['GRADIO_TEMP_DIR'] = tempfile.gettempdir()
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -244,15 +244,16 @@ class VibeVoiceASRInference:
 
 
 asr_model = None
-stop_generation_event = threading.Event()  # Потокобезопасный флаг остановки
+stop_generation_flag = False
 current_model_path = None
 model_loading_lock = threading.Lock()
 
 
 class StopOnFlag(StoppingCriteria):
-    """Критерий остановки по потокобезопасному событию."""
+    """Критерий остановки по флагу."""
     def __call__(self, input_ids, scores, **kwargs):
-        return stop_generation_event.is_set()
+        global stop_generation_flag
+        return stop_generation_flag
 
 
 def parse_time_to_seconds(val: Optional[str]) -> Optional[float]:
@@ -647,27 +648,15 @@ def transcribe_audio(
         
         generated_text = ""
         token_count = 0
-        was_stopped = False
         for new_text in streamer:
-            # Проверяем флаг остановки
-            if stop_generation_event.is_set():
-                was_stopped = True
-                break
             generated_text += new_text
             token_count += 1
             elapsed = time.time() - start_time
             formatted_text = generated_text.replace('},', '},\n')
             streaming_output = f"--- Распознавание... (токенов: {token_count}, время: {elapsed:.1f}с) ---\n{formatted_text}"
             yield streaming_output, "<div style='padding: 20px; text-align: center; color: #a0aec0;'>Генерация транскрипции... Аудио сегменты появятся после завершения.</div>"
-
-        # Ожидаем завершения потока (если не остановлен)
-        if not was_stopped and not stop_generation_event.is_set():
-            transcription_thread.join()
-
-        # Если была остановка - выводим сообщение
-        if was_stopped or stop_generation_event.is_set():
-            yield "--- Распознавание остановлено пользователем ---\n" + generated_text.replace('},', '},\n'), ""
-            return
+        
+        transcription_thread.join()
         
         if result_container["error"]:
             yield f"Ошибка транскрибации: {result_container['error']}", ""
@@ -964,6 +953,7 @@ def create_gradio_interface():
     )
     
     with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
+        demo.queue(default_concurrency_limit=2)
         
         last_segments = gr.State([])
         
@@ -1135,12 +1125,12 @@ def create_gradio_interface():
         
         
         def reset_stop_flag():
-            """Сброс флага остановки перед началом новой транскрибации."""
-            stop_generation_event.clear()
-
+            global stop_generation_flag
+            stop_generation_flag = False
+        
         def set_stop_flag():
-            """Установка флага остановки."""
-            stop_generation_event.set()
+            global stop_generation_flag
+            stop_generation_flag = True
         
         def load_model_handler(model_path, use_4bit):
             return initialize_model(model_path, use_4bit)
@@ -1247,9 +1237,8 @@ def create_gradio_interface():
             return gr.update(visible=True), gr.update(visible=False)
         
         def stop_transcription():
-            """Остановка транскрибации - устанавливает флаг и возвращает кнопки в исходное состояние."""
             set_stop_flag()
-            return gr.update(visible=True), gr.update(visible=False)
+            return gr.update(visible=True), gr.update(visible=False, value="Стоп")
         
         transcribe_event = transcribe_button.click(
             fn=start_transcription,
@@ -1277,8 +1266,7 @@ def create_gradio_interface():
             fn=stop_transcription,
             inputs=[],
             outputs=[transcribe_button, stop_button],
-            queue=False,
-            cancels=[transcribe_event]  # Отменяет запущенную транскрибацию в очереди
+            queue=False
         )
         
         show_timestamps_checkbox.change(
@@ -1323,7 +1311,6 @@ def create_gradio_interface():
             js="() => new Promise(resolve => setTimeout(resolve, 1500))"
         )
     
-    demo.queue(default_concurrency_limit=2)
     return demo
 
 
@@ -1361,7 +1348,7 @@ if __name__ == "__main__":
                 allowed_paths.append(drive_path)
         gr.set_static_paths(paths=allowed_paths)
     
-    demo.launch(
+    demo.queue(default_concurrency_limit=2).launch(
         server_name="127.0.0.1",
         server_port=7860,
         share=False,
