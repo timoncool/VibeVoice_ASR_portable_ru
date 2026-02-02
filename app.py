@@ -881,13 +881,9 @@ def create_gradio_interface():
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
         gr.HTML("""
-        <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9; text-align: left;">
-            <p style="font-size: 0.85rem; margin-bottom: 0.3rem; margin-left: 0; padding-left: 0;">
-                Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
-            </p>
-            <p style="font-size: 0.85rem; margin: 0; margin-left: 0; padding-left: 0;">
-                <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей
-            </p>
+        <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;">
+            <span style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</span><br>
+            <span style="font-size: 0.85rem;"><a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</span>
         </div>
         """)
         
@@ -908,9 +904,8 @@ def create_gradio_interface():
                     info="Экономит память GPU, но замедляет работу"
                 )
                 
-                with gr.Row():
-                    load_model_btn = gr.Button("Загрузить модель", variant="primary", scale=1)
-                    model_status = gr.Textbox(label="Статус", interactive=False, value="Модель не загружена", scale=2)
+                model_status = gr.Textbox(label="Статус модели", interactive=False, value="Модель не загружена")
+                load_model_btn = gr.Button("Загрузить модель", variant="primary")
                 
                 gr.Markdown("---")
                 
