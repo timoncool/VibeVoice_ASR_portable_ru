@@ -32,6 +32,7 @@ import traceback
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gc
+import re
 
 from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
 
@@ -794,7 +795,7 @@ def transcribe_audio(
         yield f"Ошибка: {str(e)}", ""
 
 
-def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, hide_music: bool = False, hide_lyric: bool = False) -> str:
+def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, hide_descriptors: bool = False) -> str:
     """Форматирование текста по спикерам с опциональными метками и фильтрацией дескрипторов."""
     if not segments:
         return ""
@@ -807,11 +808,10 @@ def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, 
         if not text:
             continue
         
-        if hide_music and text == "[Music]":
-            continue
-        
-        if hide_lyric:
-            text = text.replace("[Lyric] ", "").replace("[Lyric]", "")
+        if hide_descriptors:
+            if re.match(r'^\[.+\]$', text):
+                continue
+            text = re.sub(r'\[.+?\]\s*', '', text)
         
         if not text.strip():
             continue
@@ -891,8 +891,8 @@ def create_gradio_interface():
         
         gr.HTML("""
         <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;">
-            <span style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</span><br>
-            <span style="font-size: 0.85rem;"><a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</span>
+            <div style="font-size: 0.85rem;">Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.</div>
+            <div style="font-size: 0.85rem;">Канал <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей</div>
         </div>
         """)
         
@@ -913,10 +913,8 @@ def create_gradio_interface():
                     info="Экономит память GPU, но замедляет работу"
                 )
                 
-                model_status = gr.Textbox(label="Статус модели", interactive=False, value="Модель не загружена")
+                model_status = gr.Textbox(label="Статус", interactive=False, value="Модель не загружена", show_label=False)
                 load_model_btn = gr.Button("Загрузить модель", variant="primary")
-                
-                gr.Markdown("---")
                 
                 context_info_input = gr.Textbox(
                     label="Контекст (опционально)",
@@ -1002,9 +1000,7 @@ def create_gradio_interface():
                 video_tab.select(fn=lambda: 1, inputs=[], outputs=[active_input_tab])
                 mic_tab.select(fn=lambda: 2, inputs=[], outputs=[active_input_tab])
                 
-                with gr.Row():
-                    transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", scale=3)
-                    stop_button = gr.Button("Стоп", variant="secondary", size="lg", scale=1, elem_id="stop-btn", visible=False)
+                transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg")
                 
                 gr.Markdown("## Результаты")
                 
@@ -1027,13 +1023,9 @@ def create_gradio_interface():
                                 value=True,
                                 label="Спикеры"
                             )
-                            hide_music_checkbox = gr.Checkbox(
+                            hide_descriptors_checkbox = gr.Checkbox(
                                 value=False,
-                                label="Убрать [Music]"
-                            )
-                            hide_lyric_checkbox = gr.Checkbox(
-                                value=False,
-                                label="Убрать [Lyric]"
+                                label="Убрать дескрипторы"
                             )
                         processed_output = gr.Textbox(
                             label="Текст по спикерам",
@@ -1077,8 +1069,8 @@ def create_gradio_interface():
             is_4bit_model = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
             return gr.update(value=False, interactive=not is_4bit_model)
         
-        def update_processed_text(segments, show_timestamps, show_speakers, hide_music, hide_lyric):
-            return format_processed_text(segments, show_timestamps, show_speakers, hide_music, hide_lyric)
+        def update_processed_text(segments, show_timestamps, show_speakers, hide_descriptors):
+            return format_processed_text(segments, show_timestamps, show_speakers, hide_descriptors)
         
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
@@ -1150,15 +1142,30 @@ def create_gradio_interface():
             processed = format_processed_text(segments_list, True, True)
             yield raw_text, audio_html, segments_list, processed, model_status_text
         
+        is_running = gr.State(False)
+        
+        def start_transcription():
+            reset_stop_flag()
+            return gr.update(value="Стоп", variant="stop"), True
+        
+        def finish_transcription():
+            return gr.update(value="Распознать речь", variant="primary"), False
+        
+        def handle_button_click(running):
+            if running:
+                set_stop_flag()
+                return gr.update(value="Остановка..."), running
+            return gr.update(), running
+        
         transcribe_button.click(
-            fn=reset_stop_flag,
-            inputs=[],
-            outputs=[],
+            fn=handle_button_click,
+            inputs=[is_running],
+            outputs=[transcribe_button, is_running],
             queue=False
         ).then(
-            fn=lambda: gr.update(visible=True),
+            fn=start_transcription,
             inputs=[],
-            outputs=[stop_button],
+            outputs=[transcribe_button, is_running],
             queue=False
         ).then(
             fn=transcribe_wrapper,
@@ -1170,40 +1177,27 @@ def create_gradio_interface():
             ],
             outputs=[raw_output, audio_segments_output, last_segments, processed_output, model_status]
         ).then(
-            fn=lambda: gr.update(visible=False),
+            fn=finish_transcription,
             inputs=[],
-            outputs=[stop_button],
-            queue=False
-        )
-        
-        stop_button.click(
-            fn=set_stop_flag,
-            inputs=[],
-            outputs=[raw_output],
+            outputs=[transcribe_button, is_running],
             queue=False
         )
         
         show_timestamps_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_descriptors_checkbox],
             outputs=[processed_output]
         )
         
         show_speakers_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_descriptors_checkbox],
             outputs=[processed_output]
         )
         
-        hide_music_checkbox.change(
+        hide_descriptors_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
-            outputs=[processed_output]
-        )
-        
-        hide_lyric_checkbox.change(
-            fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_music_checkbox, hide_lyric_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_descriptors_checkbox],
             outputs=[processed_output]
         )
     
