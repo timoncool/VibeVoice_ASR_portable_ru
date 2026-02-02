@@ -38,6 +38,7 @@ import gc
 import re
 import shutil
 import uuid
+import ctypes
 
 from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
 
@@ -247,6 +248,27 @@ asr_model = None
 stop_generation_event = threading.Event()  # Потокобезопасный флаг остановки
 current_model_path = None
 model_loading_lock = threading.Lock()
+transcription_thread_ref = None  # Ссылка на поток транскрибации для принудительной остановки
+
+
+def terminate_thread(thread):
+    """Принудительное прерывание потока через исключение."""
+    if thread is None or not thread.is_alive():
+        return False
+    thread_id = thread.ident
+    if thread_id is None:
+        return False
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(thread_id),
+        ctypes.py_object(SystemExit)
+    )
+    if res == 0:
+        return False
+    elif res > 1:
+        # Если затронуто больше одного потока - откатываем
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
+        return False
+    return True
 
 
 class StopOnFlag(StoppingCriteria):
@@ -641,8 +663,10 @@ def transcribe_audio(
                 result_container["error"] = str(e)
                 traceback.print_exc()
         
+        global transcription_thread_ref
         start_time = time.time()
         transcription_thread = threading.Thread(target=run_transcription)
+        transcription_thread_ref = transcription_thread  # Сохраняем ссылку для принудительной остановки
         transcription_thread.start()
         
         generated_text = ""
@@ -660,13 +684,12 @@ def transcribe_audio(
             streaming_output = f"--- Распознавание... (токенов: {token_count}, время: {elapsed:.1f}с) ---\n{formatted_text}"
             yield streaming_output, "<div style='padding: 20px; text-align: center; color: #a0aec0;'>Генерация транскрипции... Аудио сегменты появятся после завершения.</div>"
 
-        # Ожидаем завершения потока с таймаутом
-        transcription_thread.join(timeout=30)
-        if transcription_thread.is_alive():
-            print("Предупреждение: поток транскрибации всё ещё работает после таймаута")
+        # Ожидаем завершения потока (если не остановлен)
+        if not was_stopped and not stop_generation_event.is_set():
+            transcription_thread.join()
 
         # Если была остановка - выводим сообщение
-        if was_stopped:
+        if was_stopped or stop_generation_event.is_set():
             yield "--- Распознавание остановлено пользователем ---\n" + generated_text.replace('},', '},\n'), ""
             return
         
@@ -1070,8 +1093,7 @@ def create_gradio_interface():
                         video_input = gr.Video(
                             label="Видео файл",
                             sources=["upload"],
-                            interactive=True,
-                            include_audio=True  # Важно для извлечения аудио из видео
+                            interactive=True
                         )
                     
                     with gr.TabItem("Микрофон", id=2) as mic_tab:
@@ -1142,8 +1164,13 @@ def create_gradio_interface():
             stop_generation_event.clear()
 
         def set_stop_flag():
-            """Установка флага остановки для прерывания генерации."""
+            """Принудительная остановка генерации."""
+            global transcription_thread_ref
             stop_generation_event.set()
+            # Принудительно прерываем поток транскрибации
+            if transcription_thread_ref is not None and transcription_thread_ref.is_alive():
+                terminate_thread(transcription_thread_ref)
+                print("Поток транскрибации принудительно остановлен")
         
         def load_model_handler(model_path, use_4bit):
             return initialize_model(model_path, use_4bit)
@@ -1205,7 +1232,7 @@ def create_gradio_interface():
             if asr_model is None:
                 model_status_text = "Загрузка модели..."
             else:
-                model_status_text = f"Модель загружена: {os.path.basename(model_path)}"
+                model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
             
             for raw_text, audio_html in transcribe_audio(
                 selected_input if active_tab == 0 else None,
@@ -1217,7 +1244,7 @@ def create_gradio_interface():
                 model_path, use_4bit
             ):
                 if asr_model is not None:
-                    model_status_text = f"Модель загружена: {os.path.basename(model_path)}"
+                    model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
                 yield raw_text, audio_html, segments_list, "", model_status_text, gr.update()
             
             try:
@@ -1230,7 +1257,7 @@ def create_gradio_interface():
                 print(f"Ошибка парсинга сегментов: {e}")
             
             if asr_model is not None:
-                model_status_text = f"Модель загружена: {os.path.basename(model_path)}"
+                model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
             
             unique_speakers = get_unique_speakers(segments_list)
             speaker_filter_update = gr.update(
