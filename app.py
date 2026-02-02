@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import gc
 import re
 import shutil
+import uuid
 
 from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
 
@@ -542,14 +543,11 @@ def transcribe_audio(
         if isinstance(audio_input, str):
             original_path = audio_input
             ext = os.path.splitext(original_path)[1]
-            temp_copy = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(TEMP_DIR))
-            temp_copy.close()
+            safe_filename = f"{uuid.uuid4()}{ext}"
+            temp_copy_path = os.path.join(str(TEMP_DIR), safe_filename)
             try:
-                with open(original_path, 'rb') as src:
-                    data = src.read()
-                with open(temp_copy.name, 'wb') as dst:
-                    dst.write(data)
-                audio_path = temp_copy.name
+                shutil.copy2(original_path, temp_copy_path)
+                audio_path = temp_copy_path
             except Exception as copy_err:
                 print(f"Не удалось скопировать файл: {copy_err}, используем оригинал")
                 audio_path = original_path
@@ -934,7 +932,7 @@ def create_gradio_interface():
                 
                 use_4bit_checkbox = gr.Checkbox(
                     value=True,
-                    label="Использовать 4-bit квантизацию",
+                    label="Эмуляция 4-bit квантизации",
                     info="Экономит память GPU, но замедляет работу"
                 )
                 
