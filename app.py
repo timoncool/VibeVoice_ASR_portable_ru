@@ -1,0 +1,1034 @@
+#!/usr/bin/env python
+# coding=utf-8
+"""
+VibeVoice ASR Portable - Русскоязычная версия
+Распознавание речи в текст с поддержкой 4-bit квантизации
+
+Авторы:
+@Nerual Dreming - портативная версия, русификация
+Нейро-Софт (neuro-cartel.com) - адаптация и поддержка
+Microsoft - оригинальная модель VibeVoice ASR
+"""
+
+import os
+import sys
+import torch
+import numpy as np
+import soundfile as sf
+from pathlib import Path
+import time
+import json
+import gradio as gr
+from typing import List, Dict, Tuple, Optional, Generator
+import tempfile
+import base64
+import io
+import traceback
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
+
+try:
+    from pydub import AudioSegment
+    HAS_PYDUB = True
+except ImportError:
+    HAS_PYDUB = False
+    print("Предупреждение: pydub не установлен, используется WAV формат")
+
+from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration
+from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
+from vibevoice.processor.audio_utils import load_audio_use_ffmpeg, COMMON_AUDIO_EXTS
+
+APP_VERSION = "1.0.0"
+APP_NAME = "VibeVoice ASR Portable"
+
+SCRIPT_DIR = Path(__file__).parent
+OUTPUT_DIR = SCRIPT_DIR / "output"
+TEMP_DIR = SCRIPT_DIR / "temp"
+
+OUTPUT_DIR.mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True)
+
+AVAILABLE_MODELS = [
+    ("VibeVoice ASR (полная модель)", "microsoft/VibeVoice-ASR"),
+    ("VibeVoice ASR 4-bit (экономия памяти)", "scerz/VibeVoice-ASR-4bit"),
+]
+
+
+class VibeVoiceASRInference:
+    """Класс для инференса VibeVoice ASR модели."""
+    
+    def __init__(
+        self, 
+        model_path: str, 
+        device: str = "cuda", 
+        dtype: torch.dtype = torch.bfloat16, 
+        attn_implementation: str = "flash_attention_2",
+        use_4bit: bool = False
+    ):
+        """
+        Инициализация ASR пайплайна.
+        
+        Args:
+            model_path: Путь к модели или имя на HuggingFace
+            device: Устройство для инференса
+            dtype: Тип данных для весов модели
+            attn_implementation: Реализация attention ('flash_attention_2', 'sdpa', 'eager')
+            use_4bit: Использовать 4-bit квантизацию
+        """
+        print(f"Загрузка модели VibeVoice ASR из {model_path}")
+        
+        self.processor = VibeVoiceASRProcessor.from_pretrained(model_path)
+        
+        print(f"Используется attention: {attn_implementation}")
+        
+        model_kwargs = {
+            "dtype": dtype,
+            "attn_implementation": attn_implementation,
+            "trust_remote_code": True
+        }
+        
+        if use_4bit:
+            print("Включена 4-bit квантизация (bitsandbytes)")
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            model_kwargs["quantization_config"] = quantization_config
+            model_kwargs["device_map"] = "auto"
+        else:
+            model_kwargs["device_map"] = device if device == "auto" else None
+        
+        self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
+            model_path,
+            **model_kwargs
+        )
+        
+        if not use_4bit and device != "auto":
+            self.model = self.model.to(device)
+        
+        self.device = device if device != "auto" else next(self.model.parameters()).device
+        self.model.eval()
+        
+        total_params = sum(p.numel() for p in self.model.parameters())
+        print(f"Модель загружена на {self.device}")
+        print(f"Параметров: {total_params:,} ({total_params/1e9:.2f}B)")
+    
+    def transcribe(
+        self, 
+        audio_path: str = None,
+        audio_array: np.ndarray = None,
+        sample_rate: int = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        do_sample: bool = False,
+        num_beams: int = 1,
+        repetition_penalty: float = 1.0,
+        context_info: str = None,
+        streamer: Optional[TextIteratorStreamer] = None,
+    ) -> dict:
+        """
+        Транскрибация аудио в текст.
+        """
+        inputs = self.processor(
+            audio=audio_path,
+            sampling_rate=sample_rate,
+            return_tensors="pt",
+            add_generation_prompt=True,
+            context_info=context_info
+        )
+        
+        inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
+                  for k, v in inputs.items()}
+        
+        generation_config = {
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature if temperature > 0 else None,
+            "top_p": top_p if do_sample else None,
+            "do_sample": do_sample,
+            "num_beams": num_beams,
+            "repetition_penalty": repetition_penalty,
+            "pad_token_id": self.processor.pad_id,
+            "eos_token_id": self.processor.tokenizer.eos_token_id,
+        }
+        
+        if streamer is not None:
+            generation_config["streamer"] = streamer
+        
+        generation_config["stopping_criteria"] = StoppingCriteriaList([StopOnFlag()])
+        generation_config = {k: v for k, v in generation_config.items() if v is not None}
+        
+        start_time = time.time()
+        
+        input_ids = inputs['input_ids'][0]
+        total_input_tokens = input_ids.shape[0]
+        
+        pad_id = self.processor.pad_id
+        padding_mask = (input_ids == pad_id)
+        num_padding_tokens = padding_mask.sum().item()
+        
+        speech_start_id = self.processor.speech_start_id
+        speech_end_id = self.processor.speech_end_id
+        
+        input_ids_list = input_ids.tolist()
+        num_speech_tokens = 0
+        in_speech = False
+        for token_id in input_ids_list:
+            if token_id == speech_start_id:
+                in_speech = True
+                num_speech_tokens += 1
+            elif token_id == speech_end_id:
+                in_speech = False
+                num_speech_tokens += 1
+            elif in_speech:
+                num_speech_tokens += 1
+        
+        num_text_tokens = total_input_tokens - num_speech_tokens - num_padding_tokens
+        
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                **generation_config
+            )
+        
+        generation_time = time.time() - start_time
+        
+        generated_ids = output_ids[0, inputs['input_ids'].shape[1]:]
+        generated_text = self.processor.decode(generated_ids, skip_special_tokens=True)
+        
+        try:
+            transcription_segments = self.processor.post_process_transcription(generated_text)
+        except Exception as e:
+            print(f"Предупреждение: Не удалось распарсить вывод: {e}")
+            transcription_segments = []
+        
+        return {
+            "raw_text": generated_text,
+            "segments": transcription_segments,
+            "generation_time": generation_time,
+            "input_tokens": {
+                "total": total_input_tokens,
+                "speech": num_speech_tokens,
+                "text": num_text_tokens,
+                "padding": num_padding_tokens,
+            },
+        }
+
+
+asr_model = None
+stop_generation_flag = False
+current_model_path = None
+
+
+class StopOnFlag(StoppingCriteria):
+    """Критерий остановки по флагу."""
+    def __call__(self, input_ids, scores, **kwargs):
+        global stop_generation_flag
+        return stop_generation_flag
+
+
+def parse_time_to_seconds(val: Optional[str]) -> Optional[float]:
+    """Парсинг времени в секунды."""
+    if val is None:
+        return None
+    val = val.strip()
+    if not val:
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        pass
+    if ":" in val:
+        parts = val.split(":")
+        if not all(p.strip().replace(".", "", 1).isdigit() for p in parts):
+            return None
+        parts = [float(p) for p in parts]
+        if len(parts) == 3:
+            h, m, s = parts
+        elif len(parts) == 2:
+            h = 0
+            m, s = parts
+        else:
+            return None
+        return h * 3600 + m * 60 + s
+    return None
+
+
+def slice_audio_to_temp(
+    audio_data: np.ndarray,
+    sample_rate: int,
+    start_sec: Optional[float],
+    end_sec: Optional[float]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Нарезка аудио и сохранение во временный файл."""
+    n_samples = len(audio_data)
+    full_duration = n_samples / float(sample_rate)
+    start = 0.0 if start_sec is None else max(0.0, start_sec)
+    end = full_duration if end_sec is None else min(full_duration, end_sec)
+    if end <= start:
+        return None, f"Неверный диапазон времени: начало={start:.2f}с, конец={end:.2f}с"
+    start_idx = int(start * sample_rate)
+    end_idx = int(end * sample_rate)
+    segment = audio_data[start_idx:end_idx]
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=str(TEMP_DIR))
+    temp_file.close()
+    segment_int16 = (segment * 32768.0).astype(np.int16)
+    sf.write(temp_file.name, segment_int16, sample_rate, subtype='PCM_16')
+    return temp_file.name, None
+
+
+def get_device():
+    """Определение устройства."""
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def get_attn_implementation():
+    """Определение лучшей реализации attention."""
+    if not torch.cuda.is_available():
+        return "eager"
+    try:
+        import flash_attn
+        return "flash_attention_2"
+    except ImportError:
+        return "sdpa"
+
+
+def initialize_model(model_path: str, use_4bit: bool = False):
+    """Инициализация модели ASR."""
+    global asr_model, current_model_path
+    try:
+        device = get_device()
+        dtype = torch.bfloat16 if device != "cpu" else torch.float32
+        attn_impl = get_attn_implementation()
+        
+        asr_model = VibeVoiceASRInference(
+            model_path=model_path,
+            device=device,
+            dtype=dtype,
+            attn_implementation=attn_impl,
+            use_4bit=use_4bit
+        )
+        current_model_path = model_path
+        return f"Модель загружена: {model_path}"
+    except Exception as e:
+        traceback.print_exc()
+        return f"Ошибка загрузки модели: {str(e)}"
+
+
+def clip_and_encode_audio(
+    audio_data: np.ndarray,
+    sr: int,
+    start_time: float,
+    end_time: float,
+    segment_idx: int,
+    use_mp3: bool = True,
+    target_sr: int = 16000,
+    mp3_bitrate: str = "32k"
+) -> Tuple[int, Optional[str], Optional[str]]:
+    """Нарезка и кодирование аудио сегмента в base64."""
+    try:
+        start_sample = int(start_time * sr)
+        end_sample = int(end_time * sr)
+        
+        start_sample = max(0, start_sample)
+        end_sample = min(len(audio_data), end_sample)
+        
+        if start_sample >= end_sample:
+            return segment_idx, None, f"Неверный диапазон: [{start_time:.2f}с - {end_time:.2f}с]"
+        
+        segment_data = audio_data[start_sample:end_sample]
+        
+        if sr != target_sr and target_sr < sr:
+            duration = len(segment_data) / sr
+            new_length = int(duration * target_sr)
+            indices = np.linspace(0, len(segment_data) - 1, new_length)
+            segment_data = np.interp(indices, np.arange(len(segment_data)), segment_data)
+            sr = target_sr
+        
+        segment_data_int16 = (segment_data * 32768.0).astype(np.int16)
+        
+        if use_mp3 and HAS_PYDUB:
+            try:
+                wav_buffer = io.BytesIO()
+                sf.write(wav_buffer, segment_data_int16, sr, format='WAV', subtype='PCM_16')
+                wav_buffer.seek(0)
+                
+                audio_segment = AudioSegment.from_wav(wav_buffer)
+                if audio_segment.channels > 1:
+                    audio_segment = audio_segment.set_channels(1)
+                mp3_buffer = io.BytesIO()
+                audio_segment.export(mp3_buffer, format='mp3', bitrate=mp3_bitrate)
+                mp3_buffer.seek(0)
+                
+                audio_bytes = mp3_buffer.read()
+                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                audio_src = f"data:audio/mp3;base64,{audio_base64}"
+                
+                return segment_idx, audio_src, None
+            except Exception as e:
+                print(f"Ошибка конвертации в MP3 для сегмента {segment_idx}: {e}")
+        
+        wav_buffer = io.BytesIO()
+        sf.write(wav_buffer, segment_data_int16, sr, format='WAV', subtype='PCM_16')
+        wav_buffer.seek(0)
+        
+        audio_bytes = wav_buffer.read()
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        audio_src = f"data:audio/wav;base64,{audio_base64}"
+        
+        return segment_idx, audio_src, None
+        
+    except Exception as e:
+        return segment_idx, None, f"Ошибка сегмента {segment_idx}: {str(e)}"
+
+
+def extract_audio_segments(audio_path: str, segments: List[Dict]) -> List[Tuple[str, str, Optional[str]]]:
+    """Извлечение аудио сегментов с параллельной обработкой."""
+    try:
+        print(f"Загрузка аудио: {audio_path}")
+        audio_data, sr = load_audio_use_ffmpeg(audio_path, resample=False)
+        print(f"Аудио загружено: {len(audio_data)} сэмплов, {sr} Гц")
+        
+        tasks = []
+        use_mp3 = HAS_PYDUB
+        
+        for i, seg in enumerate(segments):
+            start_time = seg.get('start_time')
+            end_time = seg.get('end_time')
+            
+            if (not isinstance(start_time, (int, float)) or 
+                not isinstance(end_time, (int, float)) or 
+                start_time >= end_time):
+                tasks.append((i, None, None, None, None, None))
+                continue
+            
+            tasks.append((audio_data, sr, start_time, end_time, i, use_mp3))
+        
+        results = []
+        max_workers = os.cpu_count() or 4
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for task in tasks:
+                if task[0] is None:
+                    continue
+                future = executor.submit(clip_and_encode_audio, *task)
+                futures[future] = task[4]
+            
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    idx = futures[future]
+                    results.append((idx, None, f"Ошибка обработки: {str(e)}"))
+        
+        results.sort(key=lambda x: x[0])
+        
+        audio_segments = []
+        for i, (idx, audio_src, error_msg) in enumerate(results):
+            seg = segments[idx] if idx < len(segments) else {}
+            start_time = seg.get('start_time', 'N/A')
+            end_time = seg.get('end_time', 'N/A')
+            speaker_id = seg.get('speaker_id', 'N/A')
+            
+            segment_label = f"Сегмент {idx+1}: [{start_time:.2f}с - {end_time:.2f}с] Спикер {speaker_id}"
+            audio_segments.append((segment_label, audio_src, error_msg))
+        
+        return audio_segments
+        
+    except Exception as e:
+        print(f"Ошибка загрузки аудио: {e}")
+        return []
+
+
+def transcribe_audio(
+    audio_input,
+    audio_path_input: str,
+    start_time_input: str,
+    end_time_input: str,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    do_sample: bool,
+    repetition_penalty: float = 1.0,
+    context_info: str = ""
+) -> Generator[Tuple[str, str], None, None]:
+    """
+    Транскрибация аудио с потоковым выводом.
+    """
+    if asr_model is None:
+        yield "Ошибка: Модель не загружена! Выберите модель и нажмите 'Загрузить модель'.", ""
+        return
+    
+    if not audio_path_input and audio_input is None:
+        yield "Ошибка: Загрузите аудио файл или запишите с микрофона!", ""
+        return
+    
+    try:
+        start_sec = parse_time_to_seconds(start_time_input)
+        end_sec = parse_time_to_seconds(end_time_input)
+        
+        if (start_time_input and start_sec is None) or (end_time_input and end_sec is None):
+            yield "Ошибка: Неверный формат времени. Используйте секунды или чч:мм:сс.", ""
+            return
+
+        audio_path = None
+        audio_array = None
+        sample_rate = None
+
+        if audio_path_input:
+            candidate = Path(audio_path_input.strip())
+            if not candidate.exists():
+                yield f"Ошибка: Файл не найден: {candidate}", ""
+                return
+            audio_path = str(candidate)
+        elif isinstance(audio_input, str):
+            audio_path = audio_input
+        elif isinstance(audio_input, tuple):
+            sample_rate, audio_array = audio_input
+        elif audio_path is None:
+            yield "Ошибка: Неверный формат аудио!", ""
+            return
+
+        if start_sec is not None or end_sec is not None:
+            if audio_array is None or sample_rate is None:
+                try:
+                    audio_array, sample_rate = load_audio_use_ffmpeg(audio_path, resample=False)
+                except Exception as exc:
+                    yield f"Ошибка загрузки аудио: {exc}", ""
+                    return
+            sliced_path, err = slice_audio_to_temp(audio_array, sample_rate, start_sec, end_sec)
+            if err:
+                yield f"Ошибка: {err}", ""
+                return
+            audio_path = sliced_path
+        elif audio_array is not None and sample_rate is not None:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=str(TEMP_DIR))
+            audio_path = temp_file.name
+            temp_file.close()
+            audio_data_int16 = (audio_array * 32768.0).astype(np.int16)
+            sf.write(audio_path, audio_data_int16, sample_rate, subtype='PCM_16')
+        
+        streamer = TextIteratorStreamer(
+            asr_model.processor.tokenizer, 
+            skip_prompt=True, 
+            skip_special_tokens=True
+        )
+        
+        result_container = {"result": None, "error": None}
+        
+        def run_transcription():
+            try:
+                result_container["result"] = asr_model.transcribe(
+                    audio_path=audio_path,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    do_sample=do_sample,
+                    repetition_penalty=repetition_penalty,
+                    context_info=context_info if context_info and context_info.strip() else None,
+                    streamer=streamer
+                )
+            except Exception as e:
+                result_container["error"] = str(e)
+                traceback.print_exc()
+        
+        start_time = time.time()
+        transcription_thread = threading.Thread(target=run_transcription)
+        transcription_thread.start()
+        
+        generated_text = ""
+        token_count = 0
+        for new_text in streamer:
+            generated_text += new_text
+            token_count += 1
+            elapsed = time.time() - start_time
+            formatted_text = generated_text.replace('},', '},\n')
+            streaming_output = f"--- Распознавание... (токенов: {token_count}, время: {elapsed:.1f}с) ---\n{formatted_text}"
+            yield streaming_output, "<div style='padding: 20px; text-align: center; color: #a0aec0;'>Генерация транскрипции... Аудио сегменты появятся после завершения.</div>"
+        
+        transcription_thread.join()
+        
+        if result_container["error"]:
+            yield f"Ошибка транскрибации: {result_container['error']}", ""
+            return
+        
+        result = result_container["result"]
+        generation_time = time.time() - start_time
+        
+        input_tokens = result.get('input_tokens', {})
+        speech_tokens = input_tokens.get('speech', 0)
+        text_tokens = input_tokens.get('text', 0)
+        padding_tokens = input_tokens.get('padding', 0)
+        total_input = input_tokens.get('total', 0)
+        
+        raw_output = f"--- Результат распознавания ---\n"
+        raw_output += f"Вход: {total_input} токенов (речь: {speech_tokens}, текст: {text_tokens}, паддинг: {padding_tokens})\n"
+        raw_output += f"Выход: {token_count} токенов | Время: {generation_time:.2f}с\n"
+        raw_output += f"---\n"
+        formatted_raw_text = result['raw_text'].replace('},', '},\n')
+        raw_output += formatted_raw_text
+        
+        audio_segments_html = ""
+        segments = result['segments']
+        
+        if segments:
+            num_segments = len(segments)
+            audio_segments = extract_audio_segments(audio_path, segments)
+            
+            total_duration = sum(
+                (seg.get('end_time', 0) - seg.get('start_time', 0)) 
+                for seg in segments 
+                if isinstance(seg.get('start_time'), (int, float)) and isinstance(seg.get('end_time'), (int, float))
+            )
+            approx_size_kb = total_duration * 4
+            
+            theme_css = """
+            <style>
+            .audio-segments-container {
+                max-height: 600px;
+                overflow-y: auto;
+                padding: 10px;
+            }
+            
+            .audio-segment {
+                margin-bottom: 15px;
+                padding: 15px;
+                border: 2px solid #4a5568;
+                border-radius: 8px;
+                background-color: #2d3748;
+                transition: all 0.3s ease;
+            }
+            
+            .audio-segment:hover {
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            }
+            
+            .segment-header {
+                margin-bottom: 10px;
+            }
+            
+            .segment-title {
+                margin: 0;
+                color: #e2e8f0;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            
+            .segment-meta {
+                margin-top: 5px;
+                font-size: 14px;
+                color: #a0aec0;
+            }
+            
+            .segment-content {
+                margin-bottom: 10px;
+                padding: 12px;
+                background-color: #1a202c;
+                border-radius: 6px;
+                border-left: 4px solid #4299e1;
+                color: #e2e8f0;
+                line-height: 1.5;
+            }
+            
+            .segment-audio {
+                width: 100%;
+                margin-top: 10px;
+                border-radius: 4px;
+            }
+            
+            .segment-warning {
+                margin-top: 10px;
+                padding: 10px;
+                background-color: #744210;
+                border-radius: 4px;
+                border-left: 4px solid #d69e2e;
+                color: #faf089;
+                font-size: 13px;
+            }
+            
+            .segments-title {
+                color: #e2e8f0;
+                margin-bottom: 10px;
+            }
+            
+            .segments-description {
+                color: #a0aec0;
+                margin-bottom: 20px;
+            }
+            
+            .size-badge {
+                display: inline-block;
+                background: linear-gradient(135deg, #4a5568, #2d3748);
+                color: white;
+                padding: 4px 10px;
+                border-radius: 12px;
+                font-size: 12px;
+                margin-left: 10px;
+            }
+            </style>
+            """
+            
+            audio_segments_html = theme_css
+            audio_segments_html += f"<div class='audio-segments-container'>"
+            
+            format_info = "MP3 32kbps 16kHz моно" if HAS_PYDUB else "WAV 16kHz"
+            audio_segments_html += f"<h3 class='segments-title'>Аудио сегменты ({num_segments} шт.)"
+            audio_segments_html += f"<span class='size-badge'>~{approx_size_kb:.0f}КБ ({format_info})</span></h3>"
+            audio_segments_html += "<p class='segments-description'>Нажмите на кнопку воспроизведения для прослушивания сегмента</p>"
+            
+            for i, (label, audio_src, error_msg) in enumerate(audio_segments):
+                seg = segments[i] if i < len(segments) else {}
+                start_time_seg = seg.get('start_time', 'N/A')
+                end_time_seg = seg.get('end_time', 'N/A')
+                speaker_id = seg.get('speaker_id', 'N/A')
+                content = seg.get('text', '')
+                
+                start_str = f"{start_time_seg:.2f}" if isinstance(start_time_seg, (int, float)) else str(start_time_seg)
+                end_str = f"{end_time_seg:.2f}" if isinstance(end_time_seg, (int, float)) else str(end_time_seg)
+                
+                audio_segments_html += f"""
+                <div class='audio-segment'>
+                    <div class='segment-header'>
+                        <h4 class='segment-title'>Сегмент {i+1}</h4>
+                        <div class='segment-meta'>
+                            <strong>Время:</strong> [{start_str}с - {end_str}с] | 
+                            <strong>Спикер:</strong> {speaker_id}
+                        </div>
+                    </div>
+                    
+                    <div class='segment-content'>
+                        {content}
+                    </div>
+                """
+                
+                if audio_src:
+                    audio_type = 'audio/mp3' if 'audio/mp3' in audio_src else 'audio/wav'
+                    audio_segments_html += f"""
+                    <audio controls class='segment-audio' preload='none'>
+                        <source src='{audio_src}' type='{audio_type}'>
+                        Ваш браузер не поддерживает аудио элемент.
+                    </audio>
+                    """
+                elif error_msg:
+                    audio_segments_html += f"""
+                    <div class='segment-warning'>
+                        <small>{error_msg}</small>
+                    </div>
+                    """
+                else:
+                    audio_segments_html += """
+                    <div class='segment-warning'>
+                        <small>Воспроизведение недоступно для этого сегмента</small>
+                    </div>
+                    """
+                
+                audio_segments_html += "</div>"
+            
+            audio_segments_html += "</div>"
+        else:
+            audio_segments_html = """
+            <div style='padding: 20px; text-align: center; color: #a0aec0;'>
+                <p>Аудио сегменты недоступны.</p>
+                <p>Возможно, модель не вернула временные метки.</p>
+            </div>
+            """
+        
+        yield raw_output, audio_segments_html
+        
+    except Exception as e:
+        print(f"Ошибка транскрибации: {e}")
+        traceback.print_exc()
+        yield f"Ошибка: {str(e)}", ""
+
+
+def create_gradio_interface():
+    """Создание Gradio интерфейса."""
+    
+    custom_css = """
+    #stop-btn {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+        border: none !important;
+        color: white !important;
+    }
+    #stop-btn:hover {
+        background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
+    }
+    .credits {
+        text-align: center;
+        padding: 10px;
+        color: #a0aec0;
+        font-size: 12px;
+    }
+    .credits a {
+        color: #4299e1;
+    }
+    """
+    
+    with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=gr.themes.Base(primary_hue="blue", neutral_hue="slate").set(
+        body_background_fill="#1a202c",
+        body_background_fill_dark="#1a202c",
+        block_background_fill="#2d3748",
+        block_background_fill_dark="#2d3748",
+        block_border_color="#4a5568",
+        block_border_color_dark="#4a5568",
+        block_label_text_color="#e2e8f0",
+        block_label_text_color_dark="#e2e8f0",
+        block_title_text_color="#e2e8f0",
+        block_title_text_color_dark="#e2e8f0",
+        body_text_color="#e2e8f0",
+        body_text_color_dark="#e2e8f0",
+        body_text_color_subdued="#a0aec0",
+        body_text_color_subdued_dark="#a0aec0",
+        button_primary_background_fill="#4299e1",
+        button_primary_background_fill_dark="#4299e1",
+        button_primary_text_color="white",
+        button_primary_text_color_dark="white",
+        input_background_fill="#1a202c",
+        input_background_fill_dark="#1a202c",
+        input_border_color="#4a5568",
+        input_border_color_dark="#4a5568",
+    ), css=custom_css) as demo:
+        
+        gr.Markdown(f"""
+        # VibeVoice ASR - Распознавание речи в текст
+        ### Портативная русскоязычная версия v{APP_VERSION}
+        """)
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("## Выбор модели")
+                
+                model_dropdown = gr.Dropdown(
+                    choices=[(name, path) for name, path in AVAILABLE_MODELS],
+                    value=AVAILABLE_MODELS[0][1],
+                    label="Модель",
+                    info="4-bit версия требует меньше VRAM, но работает медленнее"
+                )
+                
+                use_4bit_checkbox = gr.Checkbox(
+                    value=False,
+                    label="Использовать 4-bit квантизацию",
+                    info="Экономит память GPU, но замедляет работу"
+                )
+                
+                load_model_btn = gr.Button("Загрузить модель", variant="primary")
+                model_status = gr.Textbox(label="Статус модели", interactive=False, value="Модель не загружена")
+                
+                gr.Markdown("## Параметры генерации")
+                max_tokens_slider = gr.Slider(
+                    minimum=4096,
+                    maximum=65536,
+                    value=8192,
+                    step=4096,
+                    label="Максимум токенов"
+                )
+                
+                gr.Markdown("### Сэмплирование")
+                do_sample_checkbox = gr.Checkbox(
+                    value=False,
+                    label="Включить сэмплирование",
+                    info="Случайная генерация вместо детерминированной"
+                )
+                
+                with gr.Column(visible=False) as sampling_params:
+                    temperature_slider = gr.Slider(
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.0,
+                        step=0.1,
+                        label="Температура",
+                        info="0 = жадный поиск, выше = больше случайности"
+                    )
+                    top_p_slider = gr.Slider(
+                        minimum=0.0,
+                        maximum=1.0,
+                        value=1.0,
+                        step=0.05,
+                        label="Top-p (Nucleus Sampling)",
+                        info="1.0 = без фильтрации"
+                    )
+                
+                repetition_penalty_slider = gr.Slider(
+                    minimum=1.0,
+                    maximum=1.2,
+                    value=1.0,
+                    step=0.01,
+                    label="Штраф за повторения",
+                    info="1.0 = без штрафа, выше = меньше повторений"
+                )
+                
+                gr.Markdown("## Контекст (опционально)")
+                context_info_input = gr.Textbox(
+                    label="Контекстная информация",
+                    placeholder="Введите ключевые слова, имена, термины...\nПример:\nИван Петров\nМашинное обучение\nOpenAI",
+                    value="",
+                    lines=4,
+                    max_lines=8,
+                    info="Помогает улучшить точность распознавания"
+                )
+            
+            with gr.Column(scale=2):
+                gr.Markdown("## Аудио вход")
+                audio_input = gr.Audio(
+                    label="Загрузите аудио файл или запишите с микрофона",
+                    sources=["upload", "microphone"],
+                    type="filepath",
+                    interactive=True
+                )
+                
+                with gr.Accordion("Дополнительно: Путь к файлу и нарезка", open=False):
+                    audio_path_input = gr.Textbox(
+                        label="Путь к аудио файлу (опционально)",
+                        placeholder="Введите путь к файлу",
+                        lines=1
+                    )
+                    with gr.Row():
+                        start_time_input = gr.Textbox(
+                            label="Начало",
+                            placeholder="напр., 0 или 00:00:00",
+                            lines=1,
+                            info="Оставьте пустым для начала файла"
+                        )
+                        end_time_input = gr.Textbox(
+                            label="Конец",
+                            placeholder="напр., 30.5 или 00:00:30.5",
+                            lines=1,
+                            info="Оставьте пустым для конца файла"
+                        )
+                
+                with gr.Row():
+                    transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", scale=3)
+                    stop_button = gr.Button("Стоп", variant="secondary", size="lg", scale=1, elem_id="stop-btn")
+                
+                gr.Markdown("## Результаты")
+                
+                with gr.Tabs():
+                    with gr.TabItem("Текст"):
+                        raw_output = gr.Textbox(
+                            label="Распознанный текст",
+                            lines=8,
+                            max_lines=20,
+                            interactive=False
+                        )
+                    
+                    with gr.TabItem("Аудио сегменты"):
+                        audio_segments_output = gr.HTML(
+                            label="Прослушайте отдельные сегменты"
+                        )
+        
+        gr.Markdown("## Инструкция")
+        gr.Markdown(f"""
+        1. **Выберите модель** и нажмите "Загрузить модель"
+           - Полная модель: лучшее качество, требует ~8GB VRAM
+           - 4-bit версия: экономит память, но медленнее
+        2. **Загрузите аудио**: файл или запись с микрофона
+           - Поддерживаемые форматы: {', '.join(sorted(set([ext.lower() for ext in COMMON_AUDIO_EXTS])))}
+           - Можно указать начало/конец для нарезки
+        3. **Контекст (опционально)**: добавьте ключевые слова для улучшения точности
+        4. **Нажмите "Распознать речь"** и дождитесь результата
+        5. **Просмотрите результаты**: текст и аудио сегменты
+        """)
+        
+        gr.HTML("""
+        <div class="credits">
+            <p>Портативная версия: <strong>Nerual Dreming</strong> | 
+            <a href="https://neuro-cartel.com" target="_blank">Нейро-Софт</a> | 
+            Модель: <a href="https://huggingface.co/microsoft/VibeVoice-ASR" target="_blank">Microsoft VibeVoice ASR</a></p>
+        </div>
+        """)
+        
+        def reset_stop_flag():
+            global stop_generation_flag
+            stop_generation_flag = False
+        
+        def set_stop_flag():
+            global stop_generation_flag
+            stop_generation_flag = True
+            return "Остановка..."
+        
+        def load_model_handler(model_path, use_4bit):
+            return initialize_model(model_path, use_4bit)
+        
+        do_sample_checkbox.change(
+            fn=lambda x: gr.update(visible=x),
+            inputs=[do_sample_checkbox],
+            outputs=[sampling_params]
+        )
+        
+        load_model_btn.click(
+            fn=load_model_handler,
+            inputs=[model_dropdown, use_4bit_checkbox],
+            outputs=[model_status]
+        )
+        
+        transcribe_button.click(
+            fn=reset_stop_flag,
+            inputs=[],
+            outputs=[],
+            queue=False
+        ).then(
+            fn=transcribe_audio,
+            inputs=[
+                audio_input,
+                audio_path_input,
+                start_time_input,
+                end_time_input,
+                max_tokens_slider,
+                temperature_slider,
+                top_p_slider,
+                do_sample_checkbox,
+                repetition_penalty_slider,
+                context_info_input
+            ],
+            outputs=[raw_output, audio_segments_output]
+        )
+        
+        stop_button.click(
+            fn=set_stop_flag,
+            inputs=[],
+            outputs=[raw_output],
+            queue=False
+        )
+    
+    return demo
+
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print(f"{APP_NAME} v{APP_VERSION}")
+    print("=" * 60)
+    print()
+    
+    device = get_device()
+    print(f"Устройство: {device.upper()}")
+    
+    if device == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    
+    attn_impl = get_attn_implementation()
+    print(f"Attention: {attn_impl}")
+    
+    print()
+    print(f"Папка вывода: {OUTPUT_DIR}")
+    print(f"Временная папка: {TEMP_DIR}")
+    print()
+    print("Запуск веб-интерфейса...")
+    print()
+    
+    demo = create_gradio_interface()
+    demo.queue(default_concurrency_limit=2).launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        share=False,
+        show_error=True,
+        inbrowser=True
+    )

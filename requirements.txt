@@ -1,0 +1,32 @@
+# VibeVoice ASR Portable - Зависимости
+# PyTorch устанавливается отдельно через install.bat
+
+# Основные зависимости VibeVoice ASR
+transformers>=4.48.0
+accelerate>=0.20.0
+sentencepiece
+
+# Аудио обработка
+soundfile
+pydub
+
+# Веб-интерфейс
+gradio>=4.0.0
+
+# Утилиты
+numpy
+huggingface_hub
+
+# Квантизация (для 4-bit модели)
+bitsandbytes>=0.43.0
+
+# Конвертация китайских символов
+opencc-python-reimplemented
+
+# Дополнительные зависимости для VibeVoice ASR
+librosa
+scipy
+tqdm
+diffusers
+ml-collections
+absl-py
