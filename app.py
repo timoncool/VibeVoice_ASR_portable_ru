@@ -434,7 +434,23 @@ def extract_audio_segments(audio_path: str, segments: List[Dict]) -> List[Tuple[
     """Извлечение аудио сегментов с параллельной обработкой."""
     try:
         print(f"Загрузка аудио: {audio_path}")
-        audio_data, sr = load_audio_use_ffmpeg(audio_path, resample=False)
+        max_retries = 5
+        retry_delay = 0.5
+        audio_data = None
+        sr = None
+        for attempt in range(max_retries):
+            try:
+                audio_data, sr = load_audio_use_ffmpeg(audio_path, resample=False)
+                break
+            except PermissionError as perm_err:
+                if attempt < max_retries - 1:
+                    print(f"PermissionError при загрузке аудио для сегментов (попытка {attempt + 1}/{max_retries}): {perm_err}")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"Не удалось загрузить аудио после {max_retries} попыток: {perm_err}")
+                    return []
+        if audio_data is None:
+            return []
         print(f"Аудио загружено: {len(audio_data)} сэмплов, {sr} Гц")
         
         tasks = []
@@ -545,12 +561,24 @@ def transcribe_audio(
             ext = os.path.splitext(original_path)[1]
             safe_filename = f"{uuid.uuid4()}{ext}"
             temp_copy_path = os.path.join(str(TEMP_DIR), safe_filename)
-            try:
-                shutil.copy2(original_path, temp_copy_path)
-                audio_path = temp_copy_path
-            except Exception as copy_err:
-                print(f"Не удалось скопировать файл: {copy_err}, используем оригинал")
-                audio_path = original_path
+            max_retries = 5
+            retry_delay = 0.5
+            for attempt in range(max_retries):
+                try:
+                    shutil.copy2(original_path, temp_copy_path)
+                    audio_path = temp_copy_path
+                    break
+                except PermissionError as perm_err:
+                    if attempt < max_retries - 1:
+                        print(f"PermissionError при копировании (попытка {attempt + 1}/{max_retries}): {perm_err}")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"Не удалось скопировать файл после {max_retries} попыток: {perm_err}")
+                        audio_path = original_path
+                except Exception as copy_err:
+                    print(f"Не удалось скопировать файл: {copy_err}, используем оригинал")
+                    audio_path = original_path
+                    break
         elif isinstance(audio_input, tuple):
             sample_rate, audio_array = audio_input
         else:
@@ -559,10 +587,24 @@ def transcribe_audio(
 
         if start_sec is not None or end_sec is not None:
             if audio_array is None or sample_rate is None:
-                try:
-                    audio_array, sample_rate = load_audio_use_ffmpeg(audio_path, resample=False)
-                except Exception as exc:
-                    yield f"Ошибка загрузки аудио: {exc}", ""
+                load_success = False
+                for attempt in range(max_retries):
+                    try:
+                        audio_array, sample_rate = load_audio_use_ffmpeg(audio_path, resample=False)
+                        load_success = True
+                        break
+                    except PermissionError as perm_err:
+                        if attempt < max_retries - 1:
+                            print(f"PermissionError при загрузке аудио (попытка {attempt + 1}/{max_retries}): {perm_err}")
+                            time.sleep(retry_delay)
+                        else:
+                            yield f"Ошибка загрузки аудио после {max_retries} попыток: {perm_err}", ""
+                            return
+                    except Exception as exc:
+                        yield f"Ошибка загрузки аудио: {exc}", ""
+                        return
+                if not load_success:
+                    yield "Ошибка: Не удалось загрузить аудио", ""
                     return
             sliced_path, err = slice_audio_to_temp(audio_array, sample_rate, start_sec, end_sec)
             if err:
