@@ -1,36 +1,16 @@
 # vibevoice/__init__.py
-# VibeVoice ASR modules for portable version
-
-from vibevoice.modular.modeling_vibevoice_asr import (
-    VibeVoiceASRForConditionalGeneration,
-    VibeVoiceASRModel,
-    VibeVoiceASRPreTrainedModel,
+from vibevoice.modular import (
+    VibeVoiceStreamingForConditionalGenerationInference,
+    VibeVoiceStreamingConfig,
 )
-from vibevoice.modular.configuration_vibevoice import (
-    VibeVoiceASRConfig,
-    VibeVoiceAcousticTokenizerConfig,
-    VibeVoiceSemanticTokenizerConfig,
-)
-from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
-from vibevoice.processor.vibevoice_tokenizer_processor import (
+from vibevoice.processor import (
+    VibeVoiceStreamingProcessor,
     VibeVoiceTokenizerProcessor,
-)
-from vibevoice.processor.audio_utils import (
-    load_audio_use_ffmpeg,
-    COMMON_AUDIO_EXTS,
-    AudioNormalizer,
 )
 
 __all__ = [
-    "VibeVoiceASRForConditionalGeneration",
-    "VibeVoiceASRModel",
-    "VibeVoiceASRPreTrainedModel",
-    "VibeVoiceASRConfig",
-    "VibeVoiceAcousticTokenizerConfig",
-    "VibeVoiceSemanticTokenizerConfig",
-    "VibeVoiceASRProcessor",
+    "VibeVoiceStreamingForConditionalGenerationInference",
+    "VibeVoiceStreamingConfig",
+    "VibeVoiceStreamingProcessor",
     "VibeVoiceTokenizerProcessor",
-    "load_audio_use_ffmpeg",
-    "COMMON_AUDIO_EXTS",
-    "AudioNormalizer",
 ]
