@@ -1015,8 +1015,6 @@ def create_gradio_interface():
         
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("## Модель")
-                
                 model_dropdown = gr.Dropdown(
                     choices=[(name, path) for name, path in AVAILABLE_MODELS],
                     value=AVAILABLE_MODELS[0][1],
@@ -1092,8 +1090,6 @@ def create_gradio_interface():
 5. Просмотрите результаты во вкладках""")
             
             with gr.Column(scale=2):
-                gr.Markdown("## Входные данные")
-                
                 active_input_tab = gr.State(0)
                 
                 with gr.Tabs() as input_tabs:
@@ -1139,8 +1135,6 @@ def create_gradio_interface():
                 with gr.Row():
                     transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", visible=True)
                     stop_button = gr.Button("Стоп", variant="stop", size="lg", visible=False)
-                
-                gr.Markdown("## Результаты")
                 
                 with gr.Tabs():
                     with gr.TabItem("Сырой текст"):
