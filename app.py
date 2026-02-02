@@ -33,6 +33,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gc
 import re
+import shutil
 
 from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
 
@@ -536,7 +537,16 @@ def transcribe_audio(
         sample_rate = None
 
         if isinstance(audio_input, str):
-            audio_path = audio_input
+            original_path = audio_input
+            ext = os.path.splitext(original_path)[1]
+            temp_copy = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(TEMP_DIR))
+            temp_copy.close()
+            try:
+                shutil.copy2(original_path, temp_copy.name)
+                audio_path = temp_copy.name
+            except Exception as copy_err:
+                print(f"Не удалось скопировать файл: {copy_err}, используем оригинал")
+                audio_path = original_path
         elif isinstance(audio_input, tuple):
             sample_rate, audio_array = audio_input
         else:
@@ -795,7 +805,7 @@ def transcribe_audio(
         yield f"Ошибка: {str(e)}", ""
 
 
-def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, hide_descriptors: bool = False) -> str:
+def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, show_descriptors: bool = False) -> str:
     """Форматирование текста по спикерам с опциональными метками и фильтрацией дескрипторов."""
     if not segments:
         return ""
@@ -808,7 +818,7 @@ def format_processed_text(segments, show_timestamps: bool, show_speakers: bool, 
         if not text:
             continue
         
-        if hide_descriptors:
+        if not show_descriptors:
             if re.match(r'^\[.+\]$', text):
                 continue
             text = re.sub(r'\[.+?\]\s*', '', text)
@@ -1016,24 +1026,25 @@ def create_gradio_interface():
                     with gr.TabItem("Обработанный текст"):
                         with gr.Row():
                             show_timestamps_checkbox = gr.Checkbox(
-                                value=True,
+                                value=False,
                                 label="Временные метки"
                             )
                             show_speakers_checkbox = gr.Checkbox(
-                                value=True,
+                                value=False,
                                 label="Спикеры"
                             )
-                            hide_descriptors_checkbox = gr.Checkbox(
+                            show_descriptors_checkbox = gr.Checkbox(
                                 value=False,
-                                label="Убрать дескрипторы"
+                                label="Показать дескрипторы"
                             )
                         processed_output = gr.Textbox(
                             label="Текст по спикерам",
                             lines=15,
                             max_lines=30,
                             interactive=True,
-                            buttons=["copy"]
+                            placeholder="Генерация транскрипции... Обработанный текст появится после завершения."
                         )
+                        copy_btn = gr.Button("Копировать текст", variant="secondary", size="sm")
                     
                     with gr.TabItem("Аудио сегменты"):
                         audio_segments_output = gr.HTML(
@@ -1069,8 +1080,8 @@ def create_gradio_interface():
             is_4bit_model = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
             return gr.update(value=False, interactive=not is_4bit_model)
         
-        def update_processed_text(segments, show_timestamps, show_speakers, hide_descriptors):
-            return format_processed_text(segments, show_timestamps, show_speakers, hide_descriptors)
+        def update_processed_text(segments, show_timestamps, show_speakers, show_descriptors):
+            return format_processed_text(segments, show_timestamps, show_speakers, show_descriptors)
         
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
@@ -1139,7 +1150,7 @@ def create_gradio_interface():
             if asr_model is not None:
                 model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
             
-            processed = format_processed_text(segments_list, True, True)
+            processed = format_processed_text(segments_list, False, False, False)
             yield raw_text, audio_html, segments_list, processed, model_status_text
         
         is_running = gr.State(False)
@@ -1185,20 +1196,27 @@ def create_gradio_interface():
         
         show_timestamps_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_descriptors_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox],
             outputs=[processed_output]
         )
         
         show_speakers_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_descriptors_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox],
             outputs=[processed_output]
         )
         
-        hide_descriptors_checkbox.change(
+        show_descriptors_checkbox.change(
             fn=update_processed_text,
-            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, hide_descriptors_checkbox],
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox, show_descriptors_checkbox],
             outputs=[processed_output]
+        )
+        
+        copy_btn.click(
+            fn=None,
+            inputs=[processed_output],
+            outputs=[],
+            js="(text) => { navigator.clipboard.writeText(text); }"
         )
     
     return demo
