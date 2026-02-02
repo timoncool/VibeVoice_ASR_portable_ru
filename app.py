@@ -240,6 +240,7 @@ class VibeVoiceASRInference:
 asr_model = None
 stop_generation_flag = False
 current_model_path = None
+model_loading_lock = threading.Lock()
 
 
 class StopOnFlag(StoppingCriteria):
@@ -318,8 +319,12 @@ def get_attn_implementation():
 
 
 def initialize_model(model_path: str, use_4bit: bool = False):
-    """Инициализация модели ASR."""
+    """Инициализация модели ASR с защитой от двойных кликов."""
     global asr_model, current_model_path
+    
+    if not model_loading_lock.acquire(blocking=False):
+        return "Загрузка уже выполняется, подождите..."
+    
     try:
         # Очистка предыдущей модели из памяти
         if asr_model is not None:
@@ -348,6 +353,8 @@ def initialize_model(model_path: str, use_4bit: bool = False):
     except Exception as e:
         traceback.print_exc()
         return f"Ошибка загрузки модели: {str(e)}"
+    finally:
+        model_loading_lock.release()
 
 
 def clip_and_encode_audio(
@@ -511,7 +518,7 @@ def transcribe_audio(
     
     audio_input = audio_file_input or video_file_input or mic_input
     
-    if not audio_path_input and audio_input is None:
+    if audio_input is None:
         yield "Ошибка: Загрузите аудио/видео файл или запишите с микрофона!", ""
         return
     
@@ -527,17 +534,11 @@ def transcribe_audio(
         audio_array = None
         sample_rate = None
 
-        if audio_path_input:
-            candidate = Path(audio_path_input.strip())
-            if not candidate.exists():
-                yield f"Ошибка: Файл не найден: {candidate}", ""
-                return
-            audio_path = str(candidate)
-        elif isinstance(audio_input, str):
+        if isinstance(audio_input, str):
             audio_path = audio_input
         elif isinstance(audio_input, tuple):
             sample_rate, audio_array = audio_input
-        elif audio_path is None:
+        else:
             yield "Ошибка: Неверный формат аудио!", ""
             return
 
@@ -793,6 +794,36 @@ def transcribe_audio(
         yield f"Ошибка: {str(e)}", ""
 
 
+def format_processed_text(segments, show_timestamps: bool, show_speakers: bool) -> str:
+    """Форматирование текста по спикерам с опциональными метками."""
+    if not segments:
+        return ""
+    
+    lines = []
+    for seg in segments:
+        text = seg.get('text', '').strip()
+        if not text:
+            continue
+        
+        prefix_parts = []
+        if show_timestamps:
+            start = seg.get('start_time', 0)
+            end = seg.get('end_time', 0)
+            if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+                prefix_parts.append(f"[{start:.1f}s - {end:.1f}s]")
+        
+        if show_speakers:
+            speaker = seg.get('speaker_id', 'N/A')
+            prefix_parts.append(f"Спикер {speaker}:")
+        
+        if prefix_parts:
+            lines.append(f"{' '.join(prefix_parts)} {text}")
+        else:
+            lines.append(text)
+    
+    return "\n\n".join(lines)
+
+
 def create_gradio_interface():
     """Создание Gradio интерфейса."""
     
@@ -806,7 +837,7 @@ def create_gradio_interface():
         background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
     }
     .credits {
-        text-align: center;
+        text-align: left;
         padding: 10px;
         color: #a0aec0;
         font-size: 12px;
@@ -841,12 +872,14 @@ def create_gradio_interface():
         input_border_color_dark="#4a5568",
     )
     
+    last_segments = gr.State([])
+    
     with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
         
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
         gr.HTML("""
-        <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9;">
+        <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9; text-align: left;">
             <p style="font-size: 0.85rem; margin-bottom: 0.3rem;">
                 Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
             </p>
@@ -876,117 +909,166 @@ def create_gradio_interface():
                 load_model_btn = gr.Button("Загрузить модель", variant="primary")
                 model_status = gr.Textbox(label="Статус модели", interactive=False, value="Модель не загружена")
                 
-                gr.Markdown("## Параметры генерации")
-                max_tokens_slider = gr.Slider(
-                    minimum=4096,
-                    maximum=65536,
-                    value=8192,
-                    step=4096,
-                    label="Максимум токенов"
-                )
-                
-                gr.Markdown("### Сэмплирование")
-                do_sample_checkbox = gr.Checkbox(
-                    value=False,
-                    label="Включить сэмплирование",
-                    info="Случайная генерация вместо детерминированной"
-                )
-                
-                with gr.Column(visible=False) as sampling_params:
-                    temperature_slider = gr.Slider(
-                        minimum=0.0,
-                        maximum=2.0,
-                        value=0.0,
-                        step=0.1,
-                        label="Температура",
-                        info="0 = жадный поиск, выше = больше случайности"
-                    )
-                    top_p_slider = gr.Slider(
-                        minimum=0.0,
-                        maximum=1.0,
-                        value=1.0,
-                        step=0.05,
-                        label="Top-p (Nucleus Sampling)",
-                        info="1.0 = без фильтрации"
-                    )
-                
-                repetition_penalty_slider = gr.Slider(
-                    minimum=1.0,
-                    maximum=1.2,
-                    value=1.0,
-                    step=0.01,
-                    label="Штраф за повторения",
-                    info="1.0 = без штрафа, выше = меньше повторений"
-                )
-                
-                gr.Markdown("## Контекст (опционально)")
                 context_info_input = gr.Textbox(
-                    label="Контекстная информация",
+                    label="Контекст (опционально)",
                     placeholder="Введите ключевые слова, имена, термины...\nПример:\nИван Петров\nМашинное обучение\nOpenAI",
                     value="",
                     lines=4,
                     max_lines=8,
                     info="Помогает улучшить точность распознавания"
                 )
+                
+                with gr.Accordion("Дополнительные параметры генерации", open=False):
+                    max_tokens_slider = gr.Slider(
+                        minimum=4096,
+                        maximum=65536,
+                        value=8192,
+                        step=4096,
+                        label="Максимум токенов"
+                    )
+                    
+                    do_sample_checkbox = gr.Checkbox(
+                        value=False,
+                        label="Включить сэмплирование",
+                        info="Случайная генерация вместо детерминированной"
+                    )
+                    
+                    with gr.Column(visible=False) as sampling_params:
+                        temperature_slider = gr.Slider(
+                            minimum=0.0,
+                            maximum=2.0,
+                            value=0.0,
+                            step=0.1,
+                            label="Температура",
+                            info="0 = жадный поиск, выше = больше случайности"
+                        )
+                        top_p_slider = gr.Slider(
+                            minimum=0.0,
+                            maximum=1.0,
+                            value=1.0,
+                            step=0.05,
+                            label="Top-p (Nucleus Sampling)",
+                            info="1.0 = без фильтрации"
+                        )
+                    
+                    repetition_penalty_slider = gr.Slider(
+                        minimum=1.0,
+                        maximum=1.2,
+                        value=1.0,
+                        step=0.01,
+                        label="Штраф за повторения",
+                        info="1.0 = без штрафа, выше = меньше повторений"
+                    )
             
             with gr.Column(scale=2):
-                gr.Markdown("## Аудио/Видео вход")
+                gr.Markdown("## Входные данные")
                 
                 with gr.Tabs():
-                    with gr.TabItem("Загрузить файл"):
+                    with gr.TabItem("Аудио"):
                         audio_input = gr.Audio(
                             label="Аудио файл",
                             sources=["upload"],
                             type="filepath",
                             interactive=True
                         )
+                        with gr.Row():
+                            audio_start_slider = gr.Slider(
+                                minimum=0,
+                                maximum=3600,
+                                value=0,
+                                step=0.1,
+                                label="Начало (сек)",
+                                info="Начало обрезки"
+                            )
+                            audio_end_slider = gr.Slider(
+                                minimum=0,
+                                maximum=3600,
+                                value=0,
+                                step=0.1,
+                                label="Конец (сек)",
+                                info="0 = до конца файла"
+                            )
+                    
+                    with gr.TabItem("Видео"):
                         video_input = gr.Video(
                             label="Видео файл",
                             sources=["upload"],
                             interactive=True
                         )
+                        with gr.Row():
+                            video_start_slider = gr.Slider(
+                                minimum=0,
+                                maximum=3600,
+                                value=0,
+                                step=0.1,
+                                label="Начало (сек)",
+                                info="Начало обрезки"
+                            )
+                            video_end_slider = gr.Slider(
+                                minimum=0,
+                                maximum=3600,
+                                value=0,
+                                step=0.1,
+                                label="Конец (сек)",
+                                info="0 = до конца файла"
+                            )
                     
-                    with gr.TabItem("Запись с микрофона"):
+                    with gr.TabItem("Микрофон"):
                         mic_input = gr.Audio(
                             label="Запишите с микрофона",
                             sources=["microphone"],
                             type="filepath",
                             interactive=True
                         )
-                
-                with gr.Accordion("Дополнительно: Путь к файлу и нарезка", open=False):
-                    audio_path_input = gr.Textbox(
-                        label="Путь к аудио файлу (опционально)",
-                        placeholder="Введите путь к файлу",
-                        lines=1
-                    )
-                    with gr.Row():
-                        start_time_input = gr.Textbox(
-                            label="Начало",
-                            placeholder="напр., 0 или 00:00:00",
-                            lines=1,
-                            info="Оставьте пустым для начала файла"
-                        )
-                        end_time_input = gr.Textbox(
-                            label="Конец",
-                            placeholder="напр., 30.5 или 00:00:30.5",
-                            lines=1,
-                            info="Оставьте пустым для конца файла"
-                        )
+                        with gr.Row():
+                            mic_start_slider = gr.Slider(
+                                minimum=0,
+                                maximum=3600,
+                                value=0,
+                                step=0.1,
+                                label="Начало (сек)",
+                                info="Начало обрезки"
+                            )
+                            mic_end_slider = gr.Slider(
+                                minimum=0,
+                                maximum=3600,
+                                value=0,
+                                step=0.1,
+                                label="Конец (сек)",
+                                info="0 = до конца файла"
+                            )
                 
                 with gr.Row():
                     transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", scale=3)
-                    stop_button = gr.Button("Стоп", variant="secondary", size="lg", scale=1, elem_id="stop-btn")
+                    stop_button = gr.Button("Стоп", variant="secondary", size="lg", scale=1, elem_id="stop-btn", visible=False)
                 
                 gr.Markdown("## Результаты")
                 
                 with gr.Tabs():
-                    with gr.TabItem("Текст"):
+                    with gr.TabItem("Сырой текст"):
                         raw_output = gr.Textbox(
-                            label="Распознанный текст",
+                            label="Распознанный текст (JSON)",
                             lines=8,
                             max_lines=20,
                             interactive=False
+                        )
+                    
+                    with gr.TabItem("Обработанный текст"):
+                        with gr.Row():
+                            show_timestamps_checkbox = gr.Checkbox(
+                                value=True,
+                                label="Показывать временные метки"
+                            )
+                            show_speakers_checkbox = gr.Checkbox(
+                                value=True,
+                                label="Показывать спикеров"
+                            )
+                        processed_output = gr.Textbox(
+                            label="Текст по спикерам",
+                            lines=10,
+                            max_lines=25,
+                            interactive=True,
+                            show_copy_button=True
                         )
                     
                     with gr.TabItem("Аудио сегменты"):
@@ -997,14 +1079,14 @@ def create_gradio_interface():
         gr.Markdown("## Инструкция")
         gr.Markdown(f"""
         1. **Выберите модель** и нажмите "Загрузить модель"
-           - Полная модель: лучшее качество, требует ~8GB VRAM
-           - 4-bit версия: экономит память, но медленнее
-        2. **Загрузите аудио**: файл или запись с микрофона
+           - Полная модель: лучшее качество, требует ~16GB VRAM
+           - 4-bit версия: экономит память (~7GB), но медленнее
+        2. **Загрузите аудио/видео** или запишите с микрофона
            - Поддерживаемые форматы: {', '.join(sorted(set([ext.lower() for ext in COMMON_AUDIO_EXTS])))}
-           - Можно указать начало/конец для нарезки
+           - Используйте слайдеры для обрезки
         3. **Контекст (опционально)**: добавьте ключевые слова для улучшения точности
         4. **Нажмите "Распознать речь"** и дождитесь результата
-        5. **Просмотрите результаты**: текст и аудио сегменты
+        5. **Просмотрите результаты**: сырой текст, обработанный текст по спикерам, аудио сегменты
         """)
         
         
@@ -1020,10 +1102,23 @@ def create_gradio_interface():
         def load_model_handler(model_path, use_4bit):
             return initialize_model(model_path, use_4bit)
         
+        def on_model_change(model_path):
+            is_4bit_model = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
+            return gr.update(value=False, interactive=not is_4bit_model)
+        
+        def update_processed_text(segments, show_timestamps, show_speakers):
+            return format_processed_text(segments, show_timestamps, show_speakers)
+        
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[do_sample_checkbox],
             outputs=[sampling_params]
+        )
+        
+        model_dropdown.change(
+            fn=on_model_change,
+            inputs=[model_dropdown],
+            outputs=[use_4bit_checkbox]
         )
         
         load_model_btn.click(
@@ -1032,30 +1127,77 @@ def create_gradio_interface():
             outputs=[model_status]
         )
         
+        def transcribe_wrapper(
+            audio_file, video_file, mic_file,
+            audio_start, audio_end, video_start, video_end, mic_start, mic_end,
+            max_tokens, temperature, top_p, do_sample, rep_penalty, context,
+            model_path, use_4bit, current_segments
+        ):
+            file_input = audio_file or video_file or mic_file
+            
+            if audio_file:
+                start_time = str(audio_start) if audio_start > 0 else ""
+                end_time = str(audio_end) if audio_end > 0 else ""
+            elif video_file:
+                start_time = str(video_start) if video_start > 0 else ""
+                end_time = str(video_end) if video_end > 0 else ""
+            elif mic_file:
+                start_time = str(mic_start) if mic_start > 0 else ""
+                end_time = str(mic_end) if mic_end > 0 else ""
+            else:
+                start_time = ""
+                end_time = ""
+            
+            segments_list = []
+            
+            for raw_text, audio_html in transcribe_audio(
+                audio_file, video_file, mic_file,
+                "",
+                start_time, end_time,
+                max_tokens, temperature, top_p, do_sample, rep_penalty, context,
+                model_path, use_4bit
+            ):
+                yield raw_text, audio_html, segments_list, ""
+            
+            try:
+                import json
+                import re
+                json_match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+                if json_match:
+                    segments_list = json.loads(json_match.group())
+            except:
+                pass
+            
+            processed = format_processed_text(segments_list, True, True)
+            yield raw_text, audio_html, segments_list, processed
+        
         transcribe_button.click(
             fn=reset_stop_flag,
             inputs=[],
             outputs=[],
             queue=False
         ).then(
-            fn=transcribe_audio,
+            fn=lambda: gr.update(visible=True),
+            inputs=[],
+            outputs=[stop_button],
+            queue=False
+        ).then(
+            fn=transcribe_wrapper,
             inputs=[
-                audio_input,
-                video_input,
-                mic_input,
-                audio_path_input,
-                start_time_input,
-                end_time_input,
-                max_tokens_slider,
-                temperature_slider,
-                top_p_slider,
-                do_sample_checkbox,
-                repetition_penalty_slider,
-                context_info_input,
-                model_dropdown,
-                use_4bit_checkbox
+                audio_input, video_input, mic_input,
+                audio_start_slider, audio_end_slider,
+                video_start_slider, video_end_slider,
+                mic_start_slider, mic_end_slider,
+                max_tokens_slider, temperature_slider, top_p_slider,
+                do_sample_checkbox, repetition_penalty_slider, context_info_input,
+                model_dropdown, use_4bit_checkbox, last_segments
             ],
-            outputs=[raw_output, audio_segments_output]
+            outputs=[raw_output, audio_segments_output, last_segments, processed_output]
+        ).then(
+            fn=lambda: gr.update(visible=False),
+            inputs=[],
+            outputs=[stop_button],
+            queue=False
         )
         
         stop_button.click(
@@ -1063,6 +1205,18 @@ def create_gradio_interface():
             inputs=[],
             outputs=[raw_output],
             queue=False
+        )
+        
+        show_timestamps_checkbox.change(
+            fn=update_processed_text,
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox],
+            outputs=[processed_output]
+        )
+        
+        show_speakers_checkbox.change(
+            fn=update_processed_text,
+            inputs=[last_segments, show_timestamps_checkbox, show_speakers_checkbox],
+            outputs=[processed_output]
         )
     
     return demo
