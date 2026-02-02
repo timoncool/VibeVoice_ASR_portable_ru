@@ -38,7 +38,6 @@ import gc
 import re
 import shutil
 import uuid
-import ctypes
 
 from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
 
@@ -248,27 +247,6 @@ asr_model = None
 stop_generation_event = threading.Event()  # Потокобезопасный флаг остановки
 current_model_path = None
 model_loading_lock = threading.Lock()
-transcription_thread_ref = None  # Ссылка на поток транскрибации для принудительной остановки
-
-
-def terminate_thread(thread):
-    """Принудительное прерывание потока через исключение."""
-    if thread is None or not thread.is_alive():
-        return False
-    thread_id = thread.ident
-    if thread_id is None:
-        return False
-    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-        ctypes.c_ulong(thread_id),
-        ctypes.py_object(SystemExit)
-    )
-    if res == 0:
-        return False
-    elif res > 1:
-        # Если затронуто больше одного потока - откатываем
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
-        return False
-    return True
 
 
 class StopOnFlag(StoppingCriteria):
@@ -663,10 +641,8 @@ def transcribe_audio(
                 result_container["error"] = str(e)
                 traceback.print_exc()
         
-        global transcription_thread_ref
         start_time = time.time()
         transcription_thread = threading.Thread(target=run_transcription)
-        transcription_thread_ref = transcription_thread  # Сохраняем ссылку для принудительной остановки
         transcription_thread.start()
         
         generated_text = ""
@@ -1164,13 +1140,8 @@ def create_gradio_interface():
             stop_generation_event.clear()
 
         def set_stop_flag():
-            """Принудительная остановка генерации."""
-            global transcription_thread_ref
+            """Установка флага остановки."""
             stop_generation_event.set()
-            # Принудительно прерываем поток транскрибации
-            if transcription_thread_ref is not None and transcription_thread_ref.is_alive():
-                terminate_thread(transcription_thread_ref)
-                print("Поток транскрибации принудительно остановлен")
         
         def load_model_handler(model_path, use_4bit):
             return initialize_model(model_path, use_4bit)
