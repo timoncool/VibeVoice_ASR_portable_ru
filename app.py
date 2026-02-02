@@ -13,8 +13,33 @@ Microsoft - оригинальная модель VibeVoice ASR
 import os
 import sys
 import tempfile
+import asyncio
 
 # GRADIO_TEMP_DIR устанавливается в run.bat - НЕ переопределять здесь!
+
+# Патч для Windows: retry при PermissionError (файл заблокирован антивирусом/системой)
+# Это стандартный подход для решения проблемы WinError 32
+if sys.platform == "win32":
+    import anyio
+    import anyio._core._fileio
+
+    _original_anyio_open_file = anyio._core._fileio.open_file
+
+    async def _retry_open_file(file, *args, **kwargs):
+        max_retries = 10
+        delay = 0.2
+        for attempt in range(max_retries):
+            try:
+                return await _original_anyio_open_file(file, *args, **kwargs)
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 1.5
+                else:
+                    raise
+
+    anyio._core._fileio.open_file = _retry_open_file
+    anyio.open_file = _retry_open_file
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -304,6 +329,27 @@ def slice_audio_to_temp(
     segment_int16 = (segment * 32768.0).astype(np.int16)
     sf.write(temp_file.name, segment_int16, sample_rate, subtype='PCM_16')
     return temp_file.name, None
+
+
+def wait_for_file_access(file_path: str, max_retries: int = 15, delay: float = 0.3) -> str:
+    """
+    Ожидание доступности файла (решение проблемы блокировки на Windows).
+    Windows блокирует файлы при копировании/сканировании антивирусом.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return file_path
+
+    for attempt in range(max_retries):
+        try:
+            with open(file_path, 'rb') as f:
+                f.read(1)  # Пробуем прочитать 1 байт
+            return file_path
+        except PermissionError:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                print(f"Файл заблокирован после {max_retries} попыток: {file_path}")
+    return file_path
 
 
 def get_device():
@@ -952,7 +998,12 @@ def create_gradio_interface():
         input_border_color_dark="#4a5568",
     )
     
-    with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
+    with gr.Blocks(
+        title="VibeVoice ASR - Распознавание речи",
+        theme=dark_theme,
+        css=custom_css,
+        delete_cache=(300, 3600)  # Очистка кэша: каждые 5 мин удалять файлы старше 1 часа
+    ) as demo:
         demo.queue(default_concurrency_limit=2)
         
         last_segments = gr.State([])
@@ -1069,6 +1120,18 @@ def create_gradio_interface():
                             interactive=True
                         )
                 
+                # Обработчики для ожидания доступности файла после загрузки (Windows file locking)
+                audio_input.upload(
+                    fn=wait_for_file_access,
+                    inputs=[audio_input],
+                    outputs=[audio_input]
+                )
+                video_input.upload(
+                    fn=wait_for_file_access,
+                    inputs=[video_input],
+                    outputs=[video_input]
+                )
+
                 audio_tab.select(fn=lambda: 0, inputs=[], outputs=[active_input_tab])
                 video_tab.select(fn=lambda: 1, inputs=[], outputs=[active_input_tab])
                 mic_tab.select(fn=lambda: 2, inputs=[], outputs=[active_input_tab])
@@ -1338,7 +1401,7 @@ if __name__ == "__main__":
     print()
     
     demo = create_gradio_interface()
-    
+
     allowed_paths = [str(SCRIPT_DIR), str(TEMP_DIR), str(OUTPUT_DIR)]
     if sys.platform == "win32":
         import string
@@ -1347,7 +1410,7 @@ if __name__ == "__main__":
             if os.path.exists(drive_path):
                 allowed_paths.append(drive_path)
         gr.set_static_paths(paths=allowed_paths)
-    
+
     demo.queue(default_concurrency_limit=2).launch(
         server_name="127.0.0.1",
         server_port=7860,
