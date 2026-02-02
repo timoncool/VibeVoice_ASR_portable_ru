@@ -801,19 +801,21 @@ def format_processed_text(segments, show_timestamps: bool, show_speakers: bool) 
     
     lines = []
     for seg in segments:
-        text = seg.get('text', '').strip()
+        text = seg.get('text') or seg.get('Content', '')
+        if isinstance(text, str):
+            text = text.strip()
         if not text:
             continue
         
         prefix_parts = []
         if show_timestamps:
-            start = seg.get('start_time', 0)
-            end = seg.get('end_time', 0)
+            start = seg.get('start_time') if seg.get('start_time') is not None else seg.get('Start', 0)
+            end = seg.get('end_time') if seg.get('end_time') is not None else seg.get('End', 0)
             if isinstance(start, (int, float)) and isinstance(end, (int, float)):
                 prefix_parts.append(f"[{start:.1f}s - {end:.1f}s]")
         
         if show_speakers:
-            speaker = seg.get('speaker_id', 'N/A')
+            speaker = seg.get('speaker_id') if seg.get('speaker_id') is not None else seg.get('Speaker', 'N/A')
             prefix_parts.append(f"Спикер {speaker}:")
         
         if prefix_parts:
@@ -880,10 +882,10 @@ def create_gradio_interface():
         
         gr.HTML("""
         <div style="padding: 8px 0; margin-bottom: 10px; opacity: 0.9; text-align: left;">
-            <p style="font-size: 0.85rem; margin-bottom: 0.3rem;">
+            <p style="font-size: 0.85rem; margin-bottom: 0.3rem; margin-left: 0; padding-left: 0;">
                 Собрал <a href="https://t.me/nerual_dreming" target="_blank" style="color: #4299e1;">Nerual Dreaming</a> — основатель <a href="https://artgeneration.me/" target="_blank" style="color: #4299e1;">ArtGeneration.me</a>, техноблогер и нейро-евангелист.
             </p>
-            <p style="font-size: 0.85rem; margin: 0;">
+            <p style="font-size: 0.85rem; margin: 0; margin-left: 0; padding-left: 0;">
                 <a href="https://t.me/neuroport" target="_blank" style="color: #4299e1;">Нейро-Софт</a> — репаки и портативки полезных нейросетей
             </p>
         </div>
@@ -1057,6 +1059,39 @@ def create_gradio_interface():
         
         def update_processed_text(segments, show_timestamps, show_speakers):
             return format_processed_text(segments, show_timestamps, show_speakers)
+        
+        def clear_other_inputs_audio(audio_val):
+            if audio_val:
+                return None, None
+            return gr.update(), gr.update()
+        
+        def clear_other_inputs_video(video_val):
+            if video_val:
+                return None, None
+            return gr.update(), gr.update()
+        
+        def clear_other_inputs_mic(mic_val):
+            if mic_val:
+                return None, None
+            return gr.update(), gr.update()
+        
+        audio_input.change(
+            fn=clear_other_inputs_audio,
+            inputs=[audio_input],
+            outputs=[video_input, mic_input]
+        )
+        
+        video_input.change(
+            fn=clear_other_inputs_video,
+            inputs=[video_input],
+            outputs=[audio_input, mic_input]
+        )
+        
+        mic_input.change(
+            fn=clear_other_inputs_mic,
+            inputs=[mic_input],
+            outputs=[audio_input, video_input]
+        )
         
         do_sample_checkbox.change(
             fn=lambda x: gr.update(visible=x),
