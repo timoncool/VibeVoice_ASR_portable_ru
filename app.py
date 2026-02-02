@@ -1044,8 +1044,7 @@ def create_gradio_interface():
                             label="Текст по спикерам",
                             lines=15,
                             max_lines=30,
-                            interactive=True,
-                            show_copy_button=True
+                            interactive=True
                         )
                     
                     with gr.TabItem("Аудио сегменты"):
