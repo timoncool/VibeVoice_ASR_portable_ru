@@ -1046,17 +1046,18 @@ def create_gradio_interface():
                 
                 with gr.Tabs() as input_tabs:
                     with gr.TabItem("Аудио", id=0) as audio_tab:
-                        audio_input = gr.File(
-                            label="Аудио файл (mp3, wav, flac, ogg, m4a)",
-                            file_types=["audio"],
-                            type="filepath"
+                        audio_input = gr.Audio(
+                            label="Аудио файл",
+                            sources=["upload"],
+                            type="filepath",
+                            interactive=True
                         )
                     
                     with gr.TabItem("Видео", id=1) as video_tab:
-                        video_input = gr.File(
-                            label="Видео файл (mp4, avi, mkv, mov, webm)",
-                            file_types=["video"],
-                            type="filepath"
+                        video_input = gr.Video(
+                            label="Видео файл",
+                            sources=["upload"],
+                            interactive=True
                         )
                     
                     with gr.TabItem("Микрофон", id=2) as mic_tab:
@@ -1071,7 +1072,9 @@ def create_gradio_interface():
                 video_tab.select(fn=lambda: 1, inputs=[], outputs=[active_input_tab])
                 mic_tab.select(fn=lambda: 2, inputs=[], outputs=[active_input_tab])
                 
-                transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg")
+                with gr.Row():
+                    transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", visible=True)
+                    stop_button = gr.Button("Стоп", variant="stop", size="lg", visible=False)
                 
                 gr.Markdown("## Результаты")
                 
@@ -1127,7 +1130,6 @@ def create_gradio_interface():
         def set_stop_flag():
             global stop_generation_flag
             stop_generation_flag = True
-            return "Остановка..."
         
         def load_model_handler(model_path, use_4bit):
             return initialize_model(model_path, use_4bit)
@@ -1226,30 +1228,21 @@ def create_gradio_interface():
             processed = format_processed_text(segments_list, show_timestamps, show_speakers, show_descriptors)
             yield raw_text, audio_html, segments_list, processed, model_status_text, speaker_filter_update
         
-        is_running = gr.State(False)
-        
         def start_transcription():
             reset_stop_flag()
-            return gr.update(value="Стоп", variant="stop"), True
+            return gr.update(visible=False), gr.update(visible=True)
         
         def finish_transcription():
-            return gr.update(value="Распознать речь", variant="primary"), False
+            return gr.update(visible=True), gr.update(visible=False)
         
-        def handle_button_click(running):
-            if running:
-                set_stop_flag()
-                return gr.update(value="Остановка..."), running
-            return gr.update(), running
+        def stop_transcription():
+            set_stop_flag()
+            return gr.update(visible=True), gr.update(visible=False, value="Стоп")
         
-        transcribe_button.click(
-            fn=handle_button_click,
-            inputs=[is_running],
-            outputs=[transcribe_button, is_running],
-            queue=False
-        ).then(
+        transcribe_event = transcribe_button.click(
             fn=start_transcription,
             inputs=[],
-            outputs=[transcribe_button, is_running],
+            outputs=[transcribe_button, stop_button],
             queue=False
         ).then(
             fn=transcribe_wrapper,
@@ -1264,7 +1257,15 @@ def create_gradio_interface():
         ).then(
             fn=finish_transcription,
             inputs=[],
-            outputs=[transcribe_button, is_running],
+            outputs=[transcribe_button, stop_button],
+            queue=False
+        )
+        
+        stop_button.click(
+            fn=stop_transcription,
+            inputs=[],
+            outputs=[transcribe_button, stop_button],
+            cancels=[transcribe_event],
             queue=False
         )
         
@@ -1345,6 +1346,7 @@ if __name__ == "__main__":
             drive_path = f"{drive}:\\"
             if os.path.exists(drive_path):
                 allowed_paths.append(drive_path)
+        gr.set_static_paths(paths=allowed_paths)
     
     demo.queue(default_concurrency_limit=2).launch(
         server_name="127.0.0.1",
