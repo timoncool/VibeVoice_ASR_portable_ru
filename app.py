@@ -14,7 +14,7 @@ import os
 import sys
 import tempfile
 
-os.environ['GRADIO_TEMP_DIR'] = tempfile.gettempdir()
+# GRADIO_TEMP_DIR устанавливается в run.bat - НЕ переопределять здесь!
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
