@@ -12,6 +12,11 @@ Microsoft - оригинальная модель VibeVoice ASR
 
 import os
 import sys
+
+# Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
 import torch
 import numpy as np
 import soundfile as sf
