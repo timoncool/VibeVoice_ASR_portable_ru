@@ -31,6 +31,7 @@ import io
 import traceback
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import gc
 
 from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList, BitsAndBytesConfig
 
@@ -320,6 +321,17 @@ def initialize_model(model_path: str, use_4bit: bool = False):
     """Инициализация модели ASR."""
     global asr_model, current_model_path
     try:
+        # Очистка предыдущей модели из памяти
+        if asr_model is not None:
+            print("Выгрузка предыдущей модели из памяти...")
+            del asr_model
+            asr_model = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            print("Память очищена")
+        
         device = get_device()
         dtype = torch.bfloat16 if device != "cpu" else torch.float32
         attn_impl = get_attn_implementation()
