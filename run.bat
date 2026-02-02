@@ -79,6 +79,7 @@ REM Переменные окружения для Python
 REM =====================================================
 set PYTHONIOENCODING=utf-8
 set PYTHONUNBUFFERED=1
+set "PYTHONPATH=%SCRIPT_DIR%"
 
 REM Запускаем приложение
 echo Запуск VibeVoice ASR...
