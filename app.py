@@ -872,9 +872,9 @@ def create_gradio_interface():
         input_border_color_dark="#4a5568",
     )
     
-    last_segments = gr.State([])
-    
     with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
+        
+        last_segments = gr.State([])
         
         gr.Markdown("# VibeVoice ASR - Распознавание речи в текст")
         
@@ -908,6 +908,8 @@ def create_gradio_interface():
                 
                 load_model_btn = gr.Button("Загрузить модель", variant="primary")
                 model_status = gr.Textbox(label="Статус модели", interactive=False, value="Модель не загружена")
+                
+                gr.Markdown("---")
                 
                 context_info_input = gr.Textbox(
                     label="Контекст (опционально)",
@@ -971,23 +973,6 @@ def create_gradio_interface():
                             type="filepath",
                             interactive=True
                         )
-                        with gr.Row():
-                            audio_start_slider = gr.Slider(
-                                minimum=0,
-                                maximum=3600,
-                                value=0,
-                                step=0.1,
-                                label="Начало (сек)",
-                                info="Начало обрезки"
-                            )
-                            audio_end_slider = gr.Slider(
-                                minimum=0,
-                                maximum=3600,
-                                value=0,
-                                step=0.1,
-                                label="Конец (сек)",
-                                info="0 = до конца файла"
-                            )
                     
                     with gr.TabItem("Видео"):
                         video_input = gr.Video(
@@ -995,23 +980,6 @@ def create_gradio_interface():
                             sources=["upload"],
                             interactive=True
                         )
-                        with gr.Row():
-                            video_start_slider = gr.Slider(
-                                minimum=0,
-                                maximum=3600,
-                                value=0,
-                                step=0.1,
-                                label="Начало (сек)",
-                                info="Начало обрезки"
-                            )
-                            video_end_slider = gr.Slider(
-                                minimum=0,
-                                maximum=3600,
-                                value=0,
-                                step=0.1,
-                                label="Конец (сек)",
-                                info="0 = до конца файла"
-                            )
                     
                     with gr.TabItem("Микрофон"):
                         mic_input = gr.Audio(
@@ -1020,23 +988,6 @@ def create_gradio_interface():
                             type="filepath",
                             interactive=True
                         )
-                        with gr.Row():
-                            mic_start_slider = gr.Slider(
-                                minimum=0,
-                                maximum=3600,
-                                value=0,
-                                step=0.1,
-                                label="Начало (сек)",
-                                info="Начало обрезки"
-                            )
-                            mic_end_slider = gr.Slider(
-                                minimum=0,
-                                maximum=3600,
-                                value=0,
-                                step=0.1,
-                                label="Конец (сек)",
-                                info="0 = до конца файла"
-                            )
                 
                 with gr.Row():
                     transcribe_button = gr.Button("Распознать речь", variant="primary", size="lg", scale=3)
@@ -1082,7 +1033,6 @@ def create_gradio_interface():
            - 4-bit версия: экономит память (~7GB), но медленнее
         2. **Загрузите аудио/видео** или запишите с микрофона
            - Поддерживаемые форматы: {', '.join(sorted(set([ext.lower() for ext in COMMON_AUDIO_EXTS])))}
-           - Используйте слайдеры для обрезки
         3. **Контекст (опционально)**: добавьте ключевые слова для улучшения точности
         4. **Нажмите "Распознать речь"** и дождитесь результата
         5. **Просмотрите результаты**: сырой текст, обработанный текст по спикерам, аудио сегменты
@@ -1128,31 +1078,15 @@ def create_gradio_interface():
         
         def transcribe_wrapper(
             audio_file, video_file, mic_file,
-            audio_start, audio_end, video_start, video_end, mic_start, mic_end,
             max_tokens, temperature, top_p, do_sample, rep_penalty, context,
             model_path, use_4bit, current_segments
         ):
-            file_input = audio_file or video_file or mic_file
-            
-            if audio_file:
-                start_time = str(audio_start) if audio_start > 0 else ""
-                end_time = str(audio_end) if audio_end > 0 else ""
-            elif video_file:
-                start_time = str(video_start) if video_start > 0 else ""
-                end_time = str(video_end) if video_end > 0 else ""
-            elif mic_file:
-                start_time = str(mic_start) if mic_start > 0 else ""
-                end_time = str(mic_end) if mic_end > 0 else ""
-            else:
-                start_time = ""
-                end_time = ""
-            
             segments_list = []
             
             for raw_text, audio_html in transcribe_audio(
                 audio_file, video_file, mic_file,
                 "",
-                start_time, end_time,
+                "", "",
                 max_tokens, temperature, top_p, do_sample, rep_penalty, context,
                 model_path, use_4bit
             ):
@@ -1184,9 +1118,6 @@ def create_gradio_interface():
             fn=transcribe_wrapper,
             inputs=[
                 audio_input, video_input, mic_input,
-                audio_start_slider, audio_end_slider,
-                video_start_slider, video_end_slider,
-                mic_start_slider, mic_end_slider,
                 max_tokens_slider, temperature_slider, top_p_slider,
                 do_sample_checkbox, repetition_penalty_slider, context_info_input,
                 model_dropdown, use_4bit_checkbox, last_segments
