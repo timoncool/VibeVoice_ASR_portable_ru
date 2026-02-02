@@ -1046,18 +1046,17 @@ def create_gradio_interface():
                 
                 with gr.Tabs() as input_tabs:
                     with gr.TabItem("Аудио", id=0) as audio_tab:
-                        audio_input = gr.Audio(
-                            label="Аудио файл",
-                            sources=["upload"],
-                            type="filepath",
-                            interactive=True
+                        audio_input = gr.File(
+                            label="Аудио файл (mp3, wav, flac, ogg, m4a)",
+                            file_types=["audio"],
+                            type="filepath"
                         )
                     
                     with gr.TabItem("Видео", id=1) as video_tab:
-                        video_input = gr.Video(
-                            label="Видео файл",
-                            sources=["upload"],
-                            interactive=True
+                        video_input = gr.File(
+                            label="Видео файл (mp4, avi, mkv, mov, webm)",
+                            file_types=["video"],
+                            type="filepath"
                         )
                     
                     with gr.TabItem("Микрофон", id=2) as mic_tab:
