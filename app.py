@@ -95,6 +95,7 @@ class VibeVoiceASRInference:
         }
         
         is_prequantized = "4bit" in model_path.lower() or "4-bit" in model_path.lower()
+        use_device_map = is_prequantized or use_4bit
         
         if is_prequantized:
             print("Модель уже квантизирована (4-bit), пропускаем дополнительную квантизацию")
@@ -110,6 +111,7 @@ class VibeVoiceASRInference:
             model_kwargs["quantization_config"] = quantization_config
             model_kwargs["device_map"] = "auto"
         else:
+            print("Загрузка полной модели в bfloat16")
             model_kwargs["device_map"] = device if device == "auto" else None
         
         self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
@@ -117,7 +119,7 @@ class VibeVoiceASRInference:
             **model_kwargs
         )
         
-        if not use_4bit and device != "auto":
+        if not use_device_map and device != "auto":
             self.model = self.model.to(device)
         
         self.device = device if device != "auto" else next(self.model.parameters()).device
@@ -126,6 +128,11 @@ class VibeVoiceASRInference:
         total_params = sum(p.numel() for p in self.model.parameters())
         print(f"Модель загружена на {self.device}")
         print(f"Параметров: {total_params:,} ({total_params/1e9:.2f}B)")
+        
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            print(f"GPU память: {allocated:.2f} GB выделено, {reserved:.2f} GB зарезервировано")
     
     def transcribe(
         self, 
