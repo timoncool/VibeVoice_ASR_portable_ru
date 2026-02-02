@@ -953,6 +953,7 @@ def create_gradio_interface():
     )
     
     with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
+        demo.queue(default_concurrency_limit=2)
         
         last_segments = gr.State([])
         
@@ -1348,7 +1349,7 @@ if __name__ == "__main__":
                 allowed_paths.append(drive_path)
         gr.set_static_paths(paths=allowed_paths)
     
-    demo.queue(default_concurrency_limit=2).launch(
+    demo.launch(
         server_name="127.0.0.1",
         server_port=7860,
         share=False,
