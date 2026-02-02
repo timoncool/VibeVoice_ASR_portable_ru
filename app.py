@@ -14,7 +14,7 @@ import os
 import sys
 import tempfile
 
-os.environ['GRADIO_TEMP_DIR'] = tempfile.gettempdir()
+# GRADIO_TEMP_DIR устанавливается в run.bat
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -244,16 +244,15 @@ class VibeVoiceASRInference:
 
 
 asr_model = None
-stop_generation_flag = False
+stop_generation_event = threading.Event()  # Потокобезопасный флаг остановки
 current_model_path = None
 model_loading_lock = threading.Lock()
 
 
 class StopOnFlag(StoppingCriteria):
-    """Критерий остановки по флагу."""
+    """Критерий остановки по потокобезопасному событию."""
     def __call__(self, input_ids, scores, **kwargs):
-        global stop_generation_flag
-        return stop_generation_flag
+        return stop_generation_event.is_set()
 
 
 def parse_time_to_seconds(val: Optional[str]) -> Optional[float]:
@@ -648,15 +647,28 @@ def transcribe_audio(
         
         generated_text = ""
         token_count = 0
+        was_stopped = False
         for new_text in streamer:
+            # Проверяем флаг остановки
+            if stop_generation_event.is_set():
+                was_stopped = True
+                break
             generated_text += new_text
             token_count += 1
             elapsed = time.time() - start_time
             formatted_text = generated_text.replace('},', '},\n')
             streaming_output = f"--- Распознавание... (токенов: {token_count}, время: {elapsed:.1f}с) ---\n{formatted_text}"
             yield streaming_output, "<div style='padding: 20px; text-align: center; color: #a0aec0;'>Генерация транскрипции... Аудио сегменты появятся после завершения.</div>"
-        
-        transcription_thread.join()
+
+        # Ожидаем завершения потока с таймаутом
+        transcription_thread.join(timeout=30)
+        if transcription_thread.is_alive():
+            print("Предупреждение: поток транскрибации всё ещё работает после таймаута")
+
+        # Если была остановка - выводим сообщение
+        if was_stopped:
+            yield "--- Распознавание остановлено пользователем ---\n" + generated_text.replace('},', '},\n'), ""
+            return
         
         if result_container["error"]:
             yield f"Ошибка транскрибации: {result_container['error']}", ""
@@ -953,7 +965,7 @@ def create_gradio_interface():
     )
     
     with gr.Blocks(title="VibeVoice ASR - Распознавание речи", theme=dark_theme, css=custom_css) as demo:
-        demo.queue(default_concurrency_limit=2)
+        # queue() вызывается один раз перед launch() в main
         
         last_segments = gr.State([])
         
@@ -1058,7 +1070,8 @@ def create_gradio_interface():
                         video_input = gr.Video(
                             label="Видео файл",
                             sources=["upload"],
-                            interactive=True
+                            interactive=True,
+                            include_audio=True  # Важно для извлечения аудио из видео
                         )
                     
                     with gr.TabItem("Микрофон", id=2) as mic_tab:
@@ -1125,12 +1138,12 @@ def create_gradio_interface():
         
         
         def reset_stop_flag():
-            global stop_generation_flag
-            stop_generation_flag = False
-        
+            """Сброс флага остановки перед началом новой транскрибации."""
+            stop_generation_event.clear()
+
         def set_stop_flag():
-            global stop_generation_flag
-            stop_generation_flag = True
+            """Установка флага остановки для прерывания генерации."""
+            stop_generation_event.set()
         
         def load_model_handler(model_path, use_4bit):
             return initialize_model(model_path, use_4bit)
@@ -1192,7 +1205,7 @@ def create_gradio_interface():
             if asr_model is None:
                 model_status_text = "Загрузка модели..."
             else:
-                model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
+                model_status_text = f"Модель загружена: {os.path.basename(model_path)}"
             
             for raw_text, audio_html in transcribe_audio(
                 selected_input if active_tab == 0 else None,
@@ -1204,7 +1217,7 @@ def create_gradio_interface():
                 model_path, use_4bit
             ):
                 if asr_model is not None:
-                    model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
+                    model_status_text = f"Модель загружена: {os.path.basename(model_path)}"
                 yield raw_text, audio_html, segments_list, "", model_status_text, gr.update()
             
             try:
@@ -1217,7 +1230,7 @@ def create_gradio_interface():
                 print(f"Ошибка парсинга сегментов: {e}")
             
             if asr_model is not None:
-                model_status_text = f"Модель загружена: {model_path.split('/')[-1]}"
+                model_status_text = f"Модель загружена: {os.path.basename(model_path)}"
             
             unique_speakers = get_unique_speakers(segments_list)
             speaker_filter_update = gr.update(
@@ -1237,8 +1250,9 @@ def create_gradio_interface():
             return gr.update(visible=True), gr.update(visible=False)
         
         def stop_transcription():
+            """Остановка транскрибации - устанавливает флаг и возвращает кнопки в исходное состояние."""
             set_stop_flag()
-            return gr.update(visible=True), gr.update(visible=False, value="Стоп")
+            return gr.update(visible=True), gr.update(visible=False)
         
         transcribe_event = transcribe_button.click(
             fn=start_transcription,
@@ -1266,7 +1280,8 @@ def create_gradio_interface():
             fn=stop_transcription,
             inputs=[],
             outputs=[transcribe_button, stop_button],
-            queue=False
+            queue=False,
+            cancels=[transcribe_event]  # Отменяет запущенную транскрибацию в очереди
         )
         
         show_timestamps_checkbox.change(
