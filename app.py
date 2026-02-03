@@ -18,49 +18,50 @@ import asyncio
 # GRADIO_TEMP_DIR устанавливается в run.bat - НЕ переопределять здесь!
 
 # Патч для Windows: retry при PermissionError (файл заблокирован антивирусом/системой)
-# Gradio использует aiofiles и anyio для чтения файлов
 if sys.platform == "win32":
-    import aiofiles
-    import aiofiles.threadpool
     import anyio
     import anyio._core._fileio
+    import aiofiles
+    import aiofiles.threadpool
 
-    # Патч aiofiles
+    # Создаём функции retry
+    _original_anyio_open = anyio._core._fileio.open_file
     _original_aiofiles_open = aiofiles.threadpool._open
 
-    async def _retry_aiofiles_open(*args, **kwargs):
-        max_retries = 15
-        delay = 0.3
-        for attempt in range(max_retries):
-            try:
-                return await _original_aiofiles_open(*args, **kwargs)
-            except PermissionError:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-                    delay *= 1.3
-                else:
-                    raise
-
-    aiofiles.threadpool._open = _retry_aiofiles_open
-
-    # Патч anyio
-    _original_anyio_open = anyio._core._fileio.open_file
-
     async def _retry_anyio_open(file, *args, **kwargs):
-        max_retries = 15
-        delay = 0.3
+        max_retries = 20
+        delay = 0.2
         for attempt in range(max_retries):
             try:
                 return await _original_anyio_open(file, *args, **kwargs)
             except PermissionError:
                 if attempt < max_retries - 1:
                     await asyncio.sleep(delay)
-                    delay *= 1.3
+                    delay *= 1.2
                 else:
                     raise
 
+    async def _retry_aiofiles_open(*args, **kwargs):
+        max_retries = 20
+        delay = 0.2
+        for attempt in range(max_retries):
+            try:
+                return await _original_aiofiles_open(*args, **kwargs)
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 1.2
+                else:
+                    raise
+
+    # Патчим модули
     anyio._core._fileio.open_file = _retry_anyio_open
     anyio.open_file = _retry_anyio_open
+    aiofiles.threadpool._open = _retry_aiofiles_open
+
+    # Патчим starlette напрямую (он импортирует anyio до нас)
+    import starlette.responses
+    starlette.responses.anyio.open_file = _retry_anyio_open
 
 # Добавляем директорию скрипта в sys.path для импорта локального модуля vibevoice
 _script_dir = os.path.dirname(os.path.abspath(__file__))
