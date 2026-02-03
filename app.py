@@ -1265,10 +1265,21 @@ def create_gradio_interface():
             
             try:
                 start_idx = raw_text.find('[')
-                end_idx = raw_text.rfind(']')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    json_str = raw_text[start_idx:end_idx+1]
-                    segments_list = json.loads(json_str)
+                if start_idx != -1:
+                    json_str = raw_text[start_idx:]
+                    # Пробуем парсить как есть
+                    end_idx = json_str.rfind(']')
+                    if end_idx != -1:
+                        segments_list = json.loads(json_str[:end_idx+1])
+                    else:
+                        # JSON неполный (остановка) - пытаемся закрыть
+                        # Находим последний полный объект
+                        last_complete = json_str.rfind('},')
+                        if last_complete == -1:
+                            last_complete = json_str.rfind('}')
+                        if last_complete != -1:
+                            fixed_json = json_str[:last_complete+1] + ']'
+                            segments_list = json.loads(fixed_json)
             except Exception as e:
                 print(f"Ошибка парсинга сегментов: {e}")
             
