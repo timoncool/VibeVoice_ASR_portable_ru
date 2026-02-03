@@ -19,7 +19,7 @@ gradio>=4.0.0
 
 # Утилиты
 numpy
-huggingface_hub
+huggingface_hub[hf_xet]
 tqdm
 requests
 
