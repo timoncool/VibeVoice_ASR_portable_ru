@@ -1300,24 +1300,35 @@ def create_gradio_interface():
 
                     if end_idx == -1:
                         # JSON неполный (остановка) - пытаемся закрыть
-                        # Ищем все позиции }, и пробуем парсить с конца
+                        # Ищем все позиции } и пробуем парсить с конца
                         positions = []
                         pos = 0
                         while True:
-                            p = json_str.find('},', pos)
+                            p = json_str.find('}', pos)
                             if p == -1:
                                 break
                             positions.append(p)
                             pos = p + 1
 
                         # Пробуем с последней позиции
+                        parsed = False
                         for p in reversed(positions):
                             try:
                                 fixed_json = json_str[:p+1] + ']'
                                 segments_list = json.loads(fixed_json)
+                                parsed = True
                                 break
                             except json.JSONDecodeError:
                                 continue
+
+                        # Если не получилось - пробуем закрыть незавершённую строку
+                        if not parsed:
+                            for suffix in ['"}]', '"}]', "'}]", '}]', ']']:
+                                try:
+                                    segments_list = json.loads(json_str + suffix)
+                                    break
+                                except json.JSONDecodeError:
+                                    continue
             except Exception as e:
                 print(f"Ошибка парсинга сегментов: {e}")
             
