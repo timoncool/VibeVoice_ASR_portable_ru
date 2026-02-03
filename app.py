@@ -1127,7 +1127,8 @@ def create_gradio_interface():
                         video_input = gr.Video(
                             label="Видео файл",
                             sources=["upload"],
-                            interactive=True
+                            interactive=True,
+                            height=400
                         )
                     
                     with gr.TabItem("Микрофон", id=2) as mic_tab:
