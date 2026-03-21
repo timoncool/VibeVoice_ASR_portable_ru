@@ -137,21 +137,6 @@ VibeVoice_ASR_portable_ru/
 - Попробуйте конвертировать в WAV
 - Убедитесь, что аудио содержит речь
 
-## Другие портативные нейросети
-
-| Проект | Описание |
-|--------|----------|
-| [Foundation Music Lab](https://github.com/timoncool/Foundation-Music-Lab) | Генерация музыки + таймлайн-редактор |
-| [LavaSR](https://github.com/timoncool/LavaSR_portable_ru) | Улучшение качества аудио |
-| [Qwen3-TTS](https://github.com/timoncool/Qwen3-TTS_portable_rus) | Синтез речи (TTS) от Qwen |
-| [SuperCaption Qwen3-VL](https://github.com/timoncool/SuperCaption_Qwen3-VL) | Генерация описаний изображений |
-| [VideoSOS](https://github.com/timoncool/videosos) | AI-видеопродакшн в браузере |
-
-## Авторы
-
-- **@Nerual Dreaming** — [neuro-cartel.com](https://neuro-cartel.com) | основатель [ArtGeneration.me](https://artgeneration.me)
-- **Нейро-Софт** ([t.me/neuroport](https://t.me/neuroport)) — репаки и портативки нейросетей
-
 **Оригинальная модель:** [Microsoft VibeVoice ASR](https://huggingface.co/microsoft/VibeVoice-ASR)
 
 **4-bit квантизация:** [scerz/VibeVoice-ASR-4bit](https://huggingface.co/scerz/VibeVoice-ASR-4bit)
@@ -166,6 +151,21 @@ VibeVoice_ASR_portable_ru/
 - [VibeVoice ASR на HuggingFace](https://huggingface.co/microsoft/VibeVoice-ASR)
 - [Репозиторий Microsoft VibeVoice](https://github.com/microsoft/VibeVoice)
 - [Телеграм канал Нейро-Софт](https://t.me/neuroport)
+
+## Другие портативные нейросети
+
+| Проект | Описание |
+|--------|----------|
+| [Foundation Music Lab](https://github.com/timoncool/Foundation-Music-Lab) | Генерация музыки + таймлайн-редактор |
+| [LavaSR](https://github.com/timoncool/LavaSR_portable_ru) | Улучшение качества аудио |
+| [Qwen3-TTS](https://github.com/timoncool/Qwen3-TTS_portable_rus) | Синтез речи (TTS) от Qwen |
+| [SuperCaption Qwen3-VL](https://github.com/timoncool/SuperCaption_Qwen3-VL) | Генерация описаний изображений |
+| [VideoSOS](https://github.com/timoncool/videosos) | AI-видеопродакшн в браузере |
+
+## Авторы
+
+- **@Nerual Dreming** ([t.me/nerual_dreming](https://t.me/nerual_dreming)) — [neuro-cartel.com](https://neuro-cartel.com) | основатель [ArtGeneration.me](https://artgeneration.me)
+- **Нейро-Софт** ([t.me/neuroport](https://t.me/neuroport)) — репаки и портативки нейросетей
 
 ---
 
