@@ -1,5 +1,7 @@
 # VibeVoice ASR Portable RU
 
+[![Stars](https://img.shields.io/github/stars/timoncool/VibeVoice_ASR_portable_ru?style=social)](https://github.com/timoncool/VibeVoice_ASR_portable_ru/stargazers)
+
 Портативная версия VibeVoice ASR для Windows с полной русификацией интерфейса.
 
 VibeVoice ASR — современная модель распознавания речи от Microsoft, которая преобразует аудио в текст с высокой точностью и поддержкой диаризации спикеров.
@@ -139,7 +141,7 @@ VibeVoice_ASR_portable_ru/
 
 | Проект | Описание |
 |--------|----------|
-| [Foundation Music Lab](https://github.com/timoncool/RC-stable-audio-tools-portable) | Генерация музыки + таймлайн-редактор |
+| [Foundation Music Lab](https://github.com/timoncool/Foundation-Music-Lab) | Генерация музыки + таймлайн-редактор |
 | [LavaSR](https://github.com/timoncool/LavaSR_portable_ru) | Улучшение качества аудио |
 | [Qwen3-TTS](https://github.com/timoncool/Qwen3-TTS_portable_rus) | Синтез речи (TTS) от Qwen |
 | [SuperCaption Qwen3-VL](https://github.com/timoncool/SuperCaption_Qwen3-VL) | Генерация описаний изображений |
@@ -147,9 +149,8 @@ VibeVoice_ASR_portable_ru/
 
 ## Авторы
 
-Собрал [Nerual Dreaming](https://t.me/nerual_dreming) — основатель [ArtGeneration.me](https://artgeneration.me/), техноблогер и нейро-евангелист.
-
-[Нейро-Софт](https://t.me/neuroport) — репаки и портативки полезных нейросетей
+- **@Nerual Dreaming** — [neuro-cartel.com](https://neuro-cartel.com) | основатель [ArtGeneration.me](https://artgeneration.me)
+- **Нейро-Софт** ([t.me/neuroport](https://t.me/neuroport)) — репаки и портативки нейросетей
 
 **Оригинальная модель:** [Microsoft VibeVoice ASR](https://huggingface.co/microsoft/VibeVoice-ASR)
 
@@ -165,3 +166,9 @@ VibeVoice_ASR_portable_ru/
 - [VibeVoice ASR на HuggingFace](https://huggingface.co/microsoft/VibeVoice-ASR)
 - [Репозиторий Microsoft VibeVoice](https://github.com/microsoft/VibeVoice)
 - [Телеграм канал Нейро-Софт](https://t.me/neuroport)
+
+---
+
+> **Если проект полезен — поставьте звёздочку!**
+
+[![Star History Chart](https://api.star-history.com/svg?repos=timoncool/VibeVoice_ASR_portable_ru&type=Date)](https://star-history.com/#timoncool/VibeVoice_ASR_portable_ru&Date)
