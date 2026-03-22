@@ -171,10 +171,12 @@ VibeVoice_ASR_portable_ru/
 
 > **Если проект полезен — поставьте звёздочку!**
 
-<a href="https://star-history.com/#timoncool/VibeVoice_ASR_portable_ru&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=timoncool/VibeVoice_ASR_portable_ru&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=timoncool/VibeVoice_ASR_portable_ru&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=timoncool/VibeVoice_ASR_portable_ru&type=Date" />
-  </picture>
+## Star History
+
+<a href="https://www.star-history.com/?repos=timoncool%2FVibeVoice_ASR_portable_ru&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=timoncool/VibeVoice_ASR_portable_ru&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=timoncool/VibeVoice_ASR_portable_ru&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=timoncool/VibeVoice_ASR_portable_ru&type=date&legend=top-left" />
+ </picture>
 </a>
