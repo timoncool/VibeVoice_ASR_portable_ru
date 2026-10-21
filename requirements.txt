@@ -22,6 +22,7 @@ numpy
 huggingface_hub[hf_xet]
 tqdm
 requests
+aiofiles
 
 # Квантизация (для 4-bit модели)
 bitsandbytes>=0.43.0
